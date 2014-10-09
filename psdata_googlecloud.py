@@ -227,6 +227,134 @@ def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV
 
     return insertResponse
 
+def load_table_from_json(service, project_id, dataset_id, target_table, source_file, schema=None, jobData=None, overwrite=False):
+    jobCollection = service.jobs()
+    import json
+    
+    # Set if overwriting or appending to table
+    if overwrite:
+        write_disposition = 'WRITE_TRUNCATE'
+    else:
+        write_disposition = 'WRITE_APPEND'
+    
+    # Normal use will set jobData JSON, but if passed in then skip this
+    if jobData is None:
+        jobData = {
+            'projectId': project_id,
+            'configuration': {
+                'load': {
+                  'sourceUris': [source_file],
+                  'sourceFormat': 'NEWLINE_DELIMITED_JSON',
+                  'schema': schema,
+                    # { 
+                    #     'fields': [
+                            # {
+                            #   'name': 'PlanName',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'Month',
+                            #   'type': 'TIMESTAMP'
+                            # },
+                            # {
+                            #   'name': 'TeamName',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'Handle',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'FullName',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'Note',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'Category',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'CourseTitle',
+                            #   'type': 'STRING'
+                            # },
+                            # {
+                            #   'name': 'UsageInSeconds',
+                            #   'type': 'INTEGER'
+                            # },
+                            # {
+                            #   'name': 'ExtractDate',
+                            #   'type': 'TIMESTAMP'
+                            # }
+                        #]
+                    #},
+                'destinationTable': {
+                  'projectId': project_id,
+                  'datasetId': dataset_id,
+                  'tableId': target_table
+                },
+                'createDisposition': 'CREATE_IF_NEEDED',
+                'writeDisposition': write_disposition, # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
+              }
+            }
+          }
+
+    #jobData = "{'projectId':" + project_id +",'configuration': {'load': {'sourceUris': [" + source_file + "], 'sourceFormat': 'NEWLINE_DELIMITED_JSON', 'schema': " + schema + ", 'destinationTable': 'projectId': " + project_id + ", 'datasetId': " + dataset_id + ",'tableId': " + target_table + "},'createDisposition': 'CREATE_IF_NEEDED',} } }"
+    #print jobData
+    insertResponse = jobCollection.insert(projectId=project_id, body=jobData).execute()
+    #print insertResponse
+    job_status_loop(project_id,jobCollection,insertResponse)
+
+def load_table(service, project_id, job_data):
+    """This is a basic wrapper for the google big query jobs.insert() method.
+
+        Args:
+            service: service object for BigQuery
+            job_data: json with job details
+
+        Returns:
+            None
+    """
+    jobCollection = service.jobs()
+    insertResponse = jobCollection.insert(projectId=project_id, body=job_data).execute()
+    job_status_loop(project_id,jobCollection,insertResponse)
+
+
+def load_from_query(service, project_id, dataset_id, target_table, source_query,overwrite = False):
+    
+    job_collection = service.jobs()
+
+    if overwrite:
+        write_disposition = 'WRITE_TRUNCATE'
+    else:
+        write_disposition = 'WRITE_APPEND'
+    
+    job_data = {
+        'projectId': project_id,
+        'configuration': {
+            'query': {
+                'allowLargerResults': 'True',
+                'flattenResults': 'True', # [Experimental] Flattens all nested and repeated fields in the query results. The default value is true. allowLargeResults must be true if this is set to false.
+                'destinationTable': {
+                    'projectId': project_id,
+                    'datasetId': dataset_id,
+                    'tableId': target_table,
+                },
+                'priority': 'BATCH',
+                'writeDisposition': write_disposition, # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
+                'createDisposition': 'CREATE_IF_NEEDED', # [Optional] Specifies whether the job is allowed to create new tables. The following values are supported: CREATE_IF_NEEDED: If the table does not exist, BigQuery creates the table. CREATE_NEVER: The table must already exist. If it does not, a 'notFound' error is returned in the job result. The default value is CREATE_IF_NEEDED. Creation, truncation and append actions occur as one atomic update upon job completion.
+                'query':source_query,    
+            },
+        },
+    }
+
+    response = job_collection.insert(projectId=project_id, body=job_data).execute()
+    #print response
+    job_status_loop(project_id,job_collection,response)
+
+
 #create and run job
 # def loadPartition_SampleTable(service, projectId, datasetId, targetTableId, sourceQuery):
     

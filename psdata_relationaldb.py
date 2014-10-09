@@ -109,10 +109,39 @@ def sql_get_schema(connection,query,include_extract_date = True):
     return schema_list
 
 
-def cursor_to_json(cursor, dest_file):
+def cursor_to_json(cursor, dest_file, dest_schema_file=None):
+    """Takes a cursor and creates JSON file with the data 
+    and a schema file for loading to other data systems.
+
+    Args:
+        cursor: cursor object with data to extract to file
+        dest_file: string, path and file name to save data
+
+    Returns:
+        None
+    """
     schema = []
     for i in cursor.description:
         schema.append([i[0],str(i[1])])
+    
+    with open(dest_schema_file,'wb') as schemafile:
+        for row in schema:
+            col = row[0]
+            if 'date' in row[1]:
+                datatype = 'timestamp'
+            elif 'list' in row[1]:
+                datatype = 'list'
+            elif 'int' in row[1]:
+                datatype = 'integer'
+            elif 'float' in row[1]:
+                datatype = 'float'
+            elif 'bool' in row[1]:
+                datatype = 'boolean'
+            elif 'str' in row[1]:
+                datatype = 'string'
+            else:
+                datatype = 'string'
+            schemafile.write("%s\n" % (col + ',' + datatype))
 
     with open(dest_file,'wb') as outfile:
         for row in cursor:
