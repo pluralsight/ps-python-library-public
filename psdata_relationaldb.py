@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import sys
 import time
 import pyodbc
@@ -47,7 +46,7 @@ def run_sql(connection,query): #courseTagDict
             cursor object, Results of the call to pyodb.connection().cursor().execute(query)
     """ 
     cursor=connection.cursor()
-    cursor.execute(query)
+    cursor.execute(query.encode('utf-8'))
     connection.commit()
 
     return cursor
@@ -66,9 +65,10 @@ def sql_get_table_data(connection, table, schema='dbo', include_extract_date = T
     extract_date = ""
     if include_extract_date:
         extract_date = ", getdate() as ExtractDate"
-    query = 'select * ' + extract_date + ' from ' + schema + '.' + table + ' with (nolock)'
+    query = 'select * ' + extract_date + ' from ' + schema + '.[' + table + '] with (nolock)'
+    print query
     cursor=connection.cursor()
-    cursor.execute(query)
+    cursor.execute(query.encode('utf-8'))
 
     return cursor
 
@@ -85,13 +85,26 @@ def truncate_sql_table(connection,table_name):
     """ 
     sql = "truncate table " + table_name
     cursor=connection.cursor()
-    cursor.execute(sql)
+    cursor.execute(sql.encode('utf-8'))
     connection.commit()
 
     return
 
 
 def sql_get_schema(connection,query,include_extract_date = True):
+    """Reads schema from database by running the provided query.  It's recommended to
+    pass a query that is limited to 1 record to minimize the amount of rows accessed on 
+    the server.
+
+        Args:
+            connection: pyodbc.connect() object, Connection to use when running Sql 
+            query: string, Valid query string
+            include_extract_date: boolean, defaults to True to add current timestamp field 
+                    'ExtractDate' to results
+
+        Returns:
+            list, each list item contains field name and data type
+    """
     import json
 
     cursor = connection.cursor()

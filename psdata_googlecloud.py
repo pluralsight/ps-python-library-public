@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import httplib2
 import pprint
 import sys
@@ -9,7 +8,6 @@ from apiclient.discovery import build
 from apiclient.errors import HttpError
 from apiclient.http import MediaFileUpload
 from oauth2client.client import SignedJwtAssertionCredentials
-from json import dumps as json_dumps
 
 import logging
 logging.basicConfig() #included to avoid message when oauth2client tries to write to log
@@ -24,12 +22,37 @@ CHUNKSIZE = 2 * 1024 * 1024
 # Mimetype to use if one can't be guessed from the file extension.
 DEFAULT_MIMETYPE = 'application/octet-stream'
 
+def gcloud_connect(service_account, client_secret_file, scope):
+    """Create authenticated token for Google Cloud
+
+        Args:
+            service_account: service account email address, should be formatted like 5555555-bfeh64gdfg8xxxxxxxxxx@developer.gserviceaccount.com 
+            client_secret_file: local path to the .p12 file downloaded from your project's Credentials page
+            scope: string indicating the google cloud scope, such as 'https://www.googleapis.com/auth/bigquery'
+
+        Returns:
+            Authorized HTTP object, result of running SignedJwtAssertionCredentials.authorize() 
+    """
+    f = file(client_secret_file, 'rb')
+    key = f.read()
+    f.close()
+
+    credentials = SignedJwtAssertionCredentials(
+        service_account,
+        key,
+        scope=scope)
+
+    http = httplib2.Http()
+    http = credentials.authorize(http)
+
+    return http
+
 
 def query_table(service, project_id,query):
     """ Run a query against Google BigQuery.  Returns a list with the results.
     
     Args:
-        service: string, BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
         project_id: string, Name of google project which you want to query.
         query: string, Query to excecute on BigQuery.  Example: 'Select max(Date) from dataset.table'
     
@@ -63,7 +86,7 @@ def cloudstorage_upload(service, project_id, bucket, source_file,dest_file):
     """Upload a local file to a Cloud Storage bucket.
 
     Args:
-        service: string, BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
         project_id: string, Name of Google project to upload to
         bucket: string, Name of Cloud Storage bucket (exclude the "gs://" prefix)
         source_file: string, Path to the local file to upload
@@ -90,12 +113,12 @@ def cloudstorage_upload(service, project_id, bucket, source_file,dest_file):
     response = request.execute()
     return response
 
-##delete table from Big Query
+
 def delete_table(service, project_id,dataset_id,table):
     """Delete a BigQuery table.
 
     Args:
-        service: string, BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
         project_id: string, Name of Google project table resides in
         dataset_id: string, Name of dataset table resides in
         table: string, Name of table to delete (make sure you get this one right!)
@@ -145,7 +168,7 @@ def list_datasets(service, project_id):
     """Lists BigQuery datasets.
 
     Args:
-        service: string, BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
         project_id: string, Name of Google project
 
     Returns:
@@ -161,16 +184,16 @@ def list_datasets(service, project_id):
     return dataset_list
 
 
-def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV,schema,delimiter='|',skipLeadingRows=0):
+def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV,field_list,delimiter='|',skipLeadingRows=0):
     """[UNDER CONSTRUCTION - may not work properly] Loads a table in BigQuery from a CSV file.
 
     Args:
-        service: string, BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
         project_id: string, Name of Google project
         dataset_id: string, Name of dataset table resides in
         targettable: string, Name of table to create or append data to
         sourceCSV: string, Path of the file to load
-        schema: JSON, Schema of the file to be loaded
+        field_list: list, Schema of the file to be loaded
         delimiter: string, Column delimiter for file, default is | (optional)
         skipLeadingRows: integer, Number of rows to skip, default is 0 (optional)
 
@@ -178,31 +201,6 @@ def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV
         Returns job response object.  Prints out job status every 10 seconds.
     """
     
-    # example schema setup:
-    # schema = {
-    #             'fields': [
-    #             {
-    #               'name': 'ID',
-    #               'type': 'INTEGER'
-    #             },
-    #             {
-    #               'name': 'Day',
-    #               'type': 'TIMESTAMP'
-    #             {
-    #               'name': 'Description',
-    #               'type': 'STRING'
-    #             },
-    #             {
-    #               'name': 'ViewTimeInMinutes',
-    #               'type': 'FLOAT'
-    #             },
-    #             {
-    #               'name': 'LoadDate',
-    #               'type': 'TIMESTAMP'
-    #             }
-    #           ]
-    #         }
-
     jobCollection = service.jobs()
         
     jobData = {
@@ -227,7 +225,24 @@ def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV
 
     return insertResponse
 
-def load_table_from_json(service, project_id, dataset_id, target_table, source_file, schema=None, jobData=None, overwrite=False):
+def load_table_from_json(service, project_id, dataset_id, target_table, source_file, field_list=None, overwrite=False):
+    """Load a local JSON data file to a BigQuery table.  
+        Example field list:
+            field_list = [ {'name': 'ID', 'type': 'INTEGER'}, {'name': 'Day', 'type': 'TIMESTAMP'}, 
+                    {'name': 'ViewTimeInMinutes', 'type': 'FLOAT'}, {'name': 'LoadDate', 'type': 'TIMESTAMP'}]
+
+        Args:
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            project_id: string, Name of google project
+            dataset_id: string, Name of dataset for the table
+            target_table: string, Name of table to write to
+            source_file: string, path for the source file within google cloud
+            field_list: list of json entries representing field and datatype, such as {'name': 'ID', 'type': 'INTEGER'}
+            overwrite: boolean, defaults to False which will append data to table, True would overwrite
+
+        Returns:
+            None
+    """
     jobCollection = service.jobs()
     import json
     
@@ -236,82 +251,37 @@ def load_table_from_json(service, project_id, dataset_id, target_table, source_f
         write_disposition = 'WRITE_TRUNCATE'
     else:
         write_disposition = 'WRITE_APPEND'
-    
-    # Normal use will set jobData JSON, but if passed in then skip this
-    if jobData is None:
-        jobData = {
-            'projectId': project_id,
-            'configuration': {
-                'load': {
-                  'sourceUris': [source_file],
-                  'sourceFormat': 'NEWLINE_DELIMITED_JSON',
-                  'schema': schema,
-                    # { 
-                    #     'fields': [
-                            # {
-                            #   'name': 'PlanName',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'Month',
-                            #   'type': 'TIMESTAMP'
-                            # },
-                            # {
-                            #   'name': 'TeamName',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'Handle',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'FullName',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'Note',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'Category',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'CourseTitle',
-                            #   'type': 'STRING'
-                            # },
-                            # {
-                            #   'name': 'UsageInSeconds',
-                            #   'type': 'INTEGER'
-                            # },
-                            # {
-                            #   'name': 'ExtractDate',
-                            #   'type': 'TIMESTAMP'
-                            # }
-                        #]
-                    #},
-                'destinationTable': {
-                  'projectId': project_id,
-                  'datasetId': dataset_id,
-                  'tableId': target_table
-                },
-                'createDisposition': 'CREATE_IF_NEEDED',
-                'writeDisposition': write_disposition, # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
-              }
-            }
-          }
 
-    #jobData = "{'projectId':" + project_id +",'configuration': {'load': {'sourceUris': [" + source_file + "], 'sourceFormat': 'NEWLINE_DELIMITED_JSON', 'schema': " + schema + ", 'destinationTable': 'projectId': " + project_id + ", 'datasetId': " + dataset_id + ",'tableId': " + target_table + "},'createDisposition': 'CREATE_IF_NEEDED',} } }"
-    #print jobData
+    jobData = {
+        'projectId': project_id,
+        'configuration': {
+            'load': {
+              'sourceUris': [source_file],
+              'sourceFormat': 'NEWLINE_DELIMITED_JSON',
+              'schema':
+                { 
+                    'fields': field_list
+                },
+            'destinationTable': {
+              'projectId': project_id,
+              'datasetId': dataset_id,
+              'tableId': target_table
+            },
+            'createDisposition': 'CREATE_IF_NEEDED',
+            'writeDisposition': write_disposition, # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
+          }
+        }
+      }
+
     insertResponse = jobCollection.insert(projectId=project_id, body=jobData).execute()
-    #print insertResponse
     job_status_loop(project_id,jobCollection,insertResponse)
 
 def load_table(service, project_id, job_data):
     """This is a basic wrapper for the google big query jobs.insert() method.
 
         Args:
-            service: service object for BigQuery
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            project_id: string, Name of google project
             job_data: json with job details
 
         Returns:
@@ -323,7 +293,18 @@ def load_table(service, project_id, job_data):
 
 
 def load_from_query(service, project_id, dataset_id, target_table, source_query,overwrite = False):
-    
+    """
+        Args:
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            project_id: string, Name of google project
+            dataset_id: string, Name of dataset for the destination table
+            target_table: string, Name of table to write to
+            source_query: string, query to run on BigQuery for the source data (keep the resultset small or this will fail)
+            overwrite: boolean, set as True to ovewrite data in destination table (optional)
+
+        Returns:
+            None
+    """    
     job_collection = service.jobs()
 
     if overwrite:
@@ -353,32 +334,3 @@ def load_from_query(service, project_id, dataset_id, target_table, source_query,
     response = job_collection.insert(projectId=project_id, body=job_data).execute()
     #print response
     job_status_loop(project_id,job_collection,response)
-
-
-#create and run job
-# def loadPartition_SampleTable(service, projectId, datasetId, targetTableId, sourceQuery):
-    
-#     jobCollection = service.jobs()
-    
-#     jobData = {
-#         'projectId': projectId,
-#         'configuration': {
-#             'query': {
-#                 'flattenResults': 'True', # [Experimental] Flattens all nested and repeated fields in the query results. The default value is true. allowLargeResults must be true if this is set to false.
-#                 'allowLargerResults': 'True',
-#                 'destinationTable': {
-#                     'projectId': projectId,
-#                     'datasetId': datasetId,
-#                     'tableId': targetTableId,
-#                 },
-#                 'priority': 'BATCH',
-#                 'writeDisposition': 'WRITE_APPEND', # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
-#                 'createDisposition': 'CREATE_IF_NEEDED', # [Optional] Specifies whether the job is allowed to create new tables. The following values are supported: CREATE_IF_NEEDED: If the table does not exist, BigQuery creates the table. CREATE_NEVER: The table must already exist. If it does not, a 'notFound' error is returned in the job result. The default value is CREATE_IF_NEEDED. Creation, truncation and append actions occur as one atomic update upon job completion.
-#                 'query':sourceQuery,    
-#             },
-#         },
-#     }
-
-#     insertResponse = jobCollection.insert(projectId=projectId, body=jobData).execute()
-#     print insertResponse
-#     jobStatusLoop(projectId,jobCollection,insertResponse)
