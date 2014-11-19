@@ -3,7 +3,7 @@
 import sys
 import time
 import json
-
+from decimal import Decimal
 
 def data_records_to_json(data_list,schema_list,dest_file):
     with open(dest_file,'wb') as outfile:
@@ -34,7 +34,7 @@ def process_data_row(row,schema_list):
         if "list" in str(t):
             tmp_val = row[i]
         try:
-            if "date" in str(t):
+            if "date" in str(t) or str(t) == 'timestamp':
                 if row[i] is None or row[i] =="":
                     result_dct[k] = None #row[i]
                 elif str(t) == "<type 'datetime.date'>":
@@ -54,6 +54,12 @@ def process_data_row(row,schema_list):
                     for itm in val.split(','):
                         l.append(itm)
                     result_dct[k] = l
+            elif "bool" in str(t):
+                if row[i] == 1 or row[i] == True:
+                    result_dct[k] = True
+                elif row[i] is not None:
+                    result_dct[k] = False
+                else: result_dtc[k] = None
             else:
                 if row[i] is None or row[i]=="":
                     result_dct[k] = None

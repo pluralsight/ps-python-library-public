@@ -6,7 +6,6 @@ import time
 
 from apiclient.discovery import build
 from apiclient.errors import HttpError
-from apiclient.http import MediaFileUpload
 from oauth2client.client import SignedJwtAssertionCredentials
 
 import logging
@@ -19,8 +18,12 @@ logging.basicConfig() #included to avoid message when oauth2client tries to writ
 
 # Number of bytes to send/receive in each request.
 CHUNKSIZE = 2 * 1024 * 1024
+# Retry transport and file IO errors.
+RETRYABLE_ERRORS = (httplib2.HttpLib2Error, IOError)
 # Mimetype to use if one can't be guessed from the file extension.
 DEFAULT_MIMETYPE = 'application/octet-stream'
+# Number of times to retry operations that are configured to allow retries
+NUM_RETRIES = 2
 
 def gcloud_connect(service_account, client_secret_file, scope):
     """Create authenticated token for Google Cloud
@@ -82,7 +85,7 @@ def query_table(service, project_id,query):
                "the application to re-authorize")
 
 
-def cloudstorage_upload(service, project_id, bucket, source_file,dest_file):
+def cloudstorage_upload(service, project_id, bucket, source_file,dest_file, show_status_messages=True):
     """Upload a local file to a Cloud Storage bucket.
 
     Args:
@@ -98,12 +101,15 @@ def cloudstorage_upload(service, project_id, bucket, source_file,dest_file):
     #Starting code for this function is a combination from these sources:
     #   https://code.google.com/p/google-cloud-platform-samples/source/browse/file-transfer-json/chunked_transfer.py?repo=storage
     #   https://developers.google.com/api-client-library/python/guide/media_upload
+    from apiclient.http import MediaFileUpload
+
     filename = source_file
     bucket_name = bucket
     object_name = dest_file
     assert bucket_name and object_name
 
-    print 'Building upload request...'
+    if show_status_messages:
+        print('Upload request for {0}'.format(source_file))
     media = MediaFileUpload(filename, chunksize=CHUNKSIZE, resumable=True)
     if not media.mimetype():
         media = MediaFileUpload(filename, DEFAULT_MIMETYPE, resumable=True)
@@ -111,7 +117,75 @@ def cloudstorage_upload(service, project_id, bucket, source_file,dest_file):
                                      media_body=media)
 
     response = request.execute()
+
+    if show_status_messages:
+        print('Upload complete')
+
     return response
+
+
+def cloudstorage_download(service, project_id, bucket, source_file, dest_file, show_status_messages=True):
+    """Download a file from a Cloud Storage bucket to a local file.
+
+    Args:
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        project_id: string, Name of Google project to download from
+        bucket: string, Name of Cloud Storage bucket (exclude the "gs://" prefix)
+        source_file: string, Path to the file to download on Cloud Storage
+        dest_file: string, Name to give the downloaded file
+
+    Returns:
+        None
+    """
+    #Starting code for this function is a combination from these sources:
+    #   https://code.google.com/p/google-cloud-platform-samples/source/browse/file-transfer-json/chunked_transfer.py?repo=storage
+    from apiclient.http import MediaIoBaseDownload
+
+    filename = dest_file
+    bucket_name = bucket
+    object_name = source_file
+    assert bucket_name and object_name
+
+    if show_status_messages:
+        print('Download request for {0}'.format(source_file))
+    #media = MediaFileUpload(filename, chunksize=CHUNKSIZE, resumable=True)
+    #if not media.mimetype():
+    #    media = MediaFileUpload(filename, DEFAULT_MIMETYPE, resumable=True)
+    f = file(filename, 'w')
+    request = service.objects().get_media(bucket=bucket_name, object=object_name)
+    #response = request.execute()
+    media = MediaIoBaseDownload(f, request, chunksize=CHUNKSIZE)
+
+    progressless_iters = 0
+    done = False
+    while not done:
+        error = None
+        try:
+            p, done = media.next_chunk()
+        except HttpError, err:
+            error = err
+            if err.resp.status < 500:
+                raise
+        except RETRYABLE_ERRORS, err:
+            error = err
+
+        if error:
+            progressless_iters += 1
+            #handle_progressless_iter(error, progressless_iters)
+            if progressless_iters > NUM_RETRIES:
+                if show_status_messages:
+                    print('Failed to make progress for too many consecutive iterations.')
+                raise error
+            sleeptime = random.random() * (2**progressless_iters)
+            if show_status_messages:
+                print ('Caught exception (%s). Sleeping for %s seconds before retry #%d.'
+                        % (str(error), sleeptime, progressless_iters))
+            time.sleep(sleeptime)
+        else:
+            progressless_iters = 0
+
+    if show_status_messages:
+        print('Download complete')
 
 
 def delete_table(service, project_id,dataset_id,table):

@@ -6,6 +6,26 @@ import json
 from psdata_toolbox import process_data_row
 from psdata_toolbox import _defaultencode
 
+def mssql_connect(server, database, username, password):
+    """Build pyodbc connection to SQL Server from file, assuming driver name is "ODBC Driver 11 for SQL Server"
+
+        Args:
+            server: string, name or ip address for SQL Server
+            database: string, database name
+            username: string, useranme for the database
+            password: string, password for the database
+    
+        Returns:
+            pyodbc connection object
+    """
+    try:
+        connect_string = 'DRIVER={ODBC Driver 11 for SQL Server};SERVER=' + server + ';DATABASE=' + database + ';UID=' + username + ';PWD=' + password
+        connection = pyodbc.connect(connect_string)
+    except (ValueError) as e:
+        print "Error creating database connection", e
+
+    return connection
+
 
 def insert_list_to_sql(connection,lst,tableName):
     """Inserts from a list to a SQL table.  List must have the same format and item order as the table columns.
@@ -48,27 +68,6 @@ def run_sql(connection,query): #courseTagDict
     cursor=connection.cursor()
     cursor.execute(query.encode('utf-8'))
     connection.commit()
-
-    return cursor
-
-
-def sql_get_table_data(connection, table, schema='dbo', include_extract_date = True): #courseTagDict
-    """Runs SQL statement to get all records from the table (select *)
-        
-        Args:
-            connection: pyodbc.connect() object, Connection to use when selecting data 
-            table: string, Valid table
-
-        Returns:
-            cursor object, Results of the call to pyodb.connection().cursor().execute(query)
-    """ 
-    extract_date = ""
-    if include_extract_date:
-        extract_date = ", getdate() as ExtractDate"
-    query = 'select * ' + extract_date + ' from ' + schema + '.[' + table + '] with (nolock)'
-    print query
-    cursor=connection.cursor()
-    cursor.execute(query.encode('utf-8'))
 
     return cursor
 
@@ -122,7 +121,44 @@ def sql_get_schema(connection,query,include_extract_date = True):
     return schema_list
 
 
-def cursor_to_json(cursor, dest_file, dest_schema_file=None):
+def sql_get_table_data(connection, table, schema='dbo', include_extract_date = True):
+    """Runs SQL statement to get all records from the table (select *)
+        
+        Args:
+            connection: pyodbc.connect() object, Connection to use when selecting data 
+            table: string, Valid table
+
+        Returns:
+            cursor object, Results of the call to pyodb.connection().cursor().execute(query)
+    """ 
+    extract_date = ""
+    if include_extract_date:
+        extract_date = ", getdate() as ExtractDate"
+    query = 'select * ' + extract_date + ' from ' + schema + '.[' + table + '] with (nolock)'
+    print query
+    cursor=connection.cursor()
+    cursor.execute(query.encode('utf-8'))
+
+    return cursor
+
+
+def sql_get_query_data(connection, query):
+    """Runs SQL statement to get results of query specified, returned and pyodbc cursor.
+        
+        Args:
+            connection: pyodbc.connect() object, Connection to use when selecting data 
+            query: string, Valid select statement
+
+        Returns:
+            cursor object, Results of the call to pyodb.connection().cursor().execute(query)
+    """ 
+    cursor=connection.cursor()
+    cursor.execute(query.encode('utf-8'))
+
+    return cursor
+
+
+def cursor_to_json(cursor, dest_file, dest_schema_file=None, source_schema_file=None):
     """Takes a cursor and creates JSON file with the data 
     and a schema file for loading to other data systems.
 
@@ -133,28 +169,33 @@ def cursor_to_json(cursor, dest_file, dest_schema_file=None):
     Returns:
         None
     """
-    schema = []
-    for i in cursor.description:
-        schema.append([i[0],str(i[1])])
-    
-    with open(dest_schema_file,'wb') as schemafile:
-        for row in schema:
-            col = row[0]
-            if 'date' in row[1]:
-                datatype = 'timestamp'
-            elif 'list' in row[1]:
-                datatype = 'list'
-            elif 'int' in row[1]:
-                datatype = 'integer'
-            elif 'float' in row[1]:
-                datatype = 'float'
-            elif 'bool' in row[1]:
-                datatype = 'boolean'
-            elif 'str' in row[1]:
-                datatype = 'string'
-            else:
-                datatype = 'string'
-            schemafile.write("%s\n" % (col + ',' + datatype))
+    if source_schema_file is None:
+        schema = []
+        for i in cursor.description:
+            schema.append([i[0],str(i[1])])
+    else:
+        from psdata_files import get_schema_file
+        schema = get_schema_file(source_schema_file)
+
+    if dest_schema_file is not None:
+        with open(dest_schema_file,'wb') as schemafile:
+            for row in schema:
+                col = row[0]
+                if 'date' in row[1]:
+                    datatype = 'timestamp'
+                elif 'list' in row[1]:
+                    datatype = 'list'
+                elif 'int' in row[1] or 'long' in row[1]:
+                    datatype = 'integer'
+                elif 'float' in row[1]:
+                    datatype = 'float'
+                elif 'bool' in row[1]:
+                    datatype = 'boolean'
+                elif 'str' in row[1]:
+                    datatype = 'string'
+                else:
+                    datatype = 'string'
+                schemafile.write("%s\n" % (col + ',' + datatype))
 
     with open(dest_file,'wb') as outfile:
         for row in cursor:
