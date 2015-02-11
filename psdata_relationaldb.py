@@ -19,6 +19,8 @@ def mssql_connect(server, database, username, password):
             pyodbc connection object
     """
     try:
+        #Simba SQL Server ODBC Driver
+        #ODBC Driver 11 for SQL Server
         connect_string = 'DRIVER={ODBC Driver 11 for SQL Server};SERVER=' + server + ';DATABASE=' + database + ';UID=' + username + ';PWD=' + password
         connection = pyodbc.connect(connect_string)
     except (ValueError) as e:
@@ -201,3 +203,63 @@ def cursor_to_json(cursor, dest_file, dest_schema_file=None, source_schema_file=
         for row in cursor:
             result_dct = process_data_row(row,schema)
             outfile.write("%s\n" % json.dumps(result_dct, default=_defaultencode))
+
+def load_csv_to_table(table ,schema_file ,csv_file, server, database, config,cred_file='config/dblogin.config',skipfirstrow=1):
+    """Takes csv file, schema file, with sql server connection params and inserts data to a specified table
+
+    Args:
+        table: table name where csv data will be written
+        schema_file: schema file that has all column names and data type names
+        csv_file: data being loaded
+        server: sql server host name
+        config: which configuration name to pull username and password credentials
+        cred_file: location of db login config file
+        skipfirstrow(optional): if 1 then skip the first row of data (exclude headers)
+
+    Returns:
+        None
+    """    
+    from psdata_files import loop_csv_file
+    from psdata_files import get_schema_file
+
+    with open(cred_file,'rb') as cred:
+        db_info = json.loads(cred.read())
+
+    username = db_info[config]['username']
+    password = db_info[config]['password']
+
+    data_list = loop_csv_file(csv_file)
+
+    connection = mssql_connect(server, database, username, password)
+
+    schema_list = get_schema_file(schema_file)
+    #skips the first value of data_list which is the header
+    data_list = iter(data_list)
+    if skipfirstrow == 1:
+        next(data_list)
+
+    process_datarow_to_list(data_list,schema_list,connection,table)
+
+def process_datarow_to_list(data_list, schema_list, connection, table):
+    """gets a data list and converts it to the correct data type for inserts then inserts data to a table
+
+    Args:
+        data_list: a list of lists which contain data row Values
+        schema_list: a list of lists which contains all the column names with their respective data type
+
+    Returns:
+        None
+    """
+    insert_list = []
+    for i in data_list:
+        load_list = []
+        for j, val in enumerate(i):
+            if 'int' in schema_list[j][1]:
+                load_list.append(int(val))
+            elif 'date' in schema_list[j][1]:
+                load_list.append(str(val)[:19])
+            else:
+                load_list.append(str(val))
+        insert_list.append(load_list)
+
+    insert_list_to_sql(connection, insert_list, table)
