@@ -19,7 +19,7 @@ def mssql_connect(server, database, username, password):
             pyodbc connection object
     """
     try:
-        #Simba SQL Server ODBC Driver
+        # Simba SQL Server ODBC Driver
         #ODBC Driver 11 for SQL Server
         connect_string = 'DRIVER={ODBC Driver 11 for SQL Server};SERVER=' + server + ';DATABASE=' + database + ';UID=' + username + ';PWD=' + password
         connection = pyodbc.connect(connect_string)
@@ -54,6 +54,42 @@ def insert_list_to_sql(connection,lst,tableName):
 
         c = run_sql(connection,query)
         #print type(c)
+    return
+
+def insert_list_to_sql_batch(connection,lst,tableName,batchsize=1000):
+    """Inserts from a list to a SQL table.  List must have the same format and item order as the table columns.
+        Args:
+            list: list, Values to insert to table
+            tableName: string, Fully qualified SQL table name
+            batchsize: specifies what size you'd want the batches to run as
+            connection: sql server connection
+
+        Returns:
+            None
+    """ 
+    insertvals = ''
+    batchcnt = batchsize
+    rowstr = 'SELECT '
+    for row in lst:
+        if batchcnt > 0:
+            for val in row:
+                if type(val) == int:
+                    rowstr += str(val) +','
+                else:
+                    rowstr += "'" + str(val) + "',"
+            insertvals = insertvals + rowstr[:-1] + ' UNION ALL '
+            rowstr = 'SELECT '
+            batchcnt -= 1
+        elif insertvals == '':
+            break
+        else:
+            c = run_sql(connection,"INSERT INTO {0} {1}".format(tableName, insertvals[:-11]))
+            insertvals = ''
+            batchcnt = batchsize
+    
+    if batchcnt != 0:
+        c = run_sql(connection,"INSERT INTO {0} {1}".format(tableName, insertvals[:-11]))
+
     return
 
 
@@ -262,4 +298,4 @@ def process_datarow_to_list(data_list, schema_list, connection, table):
                 load_list.append(str(val))
         insert_list.append(load_list)
 
-    insert_list_to_sql(connection, insert_list, table)
+    insert_list_to_sql_batch(connection, insert_list, table,100)
