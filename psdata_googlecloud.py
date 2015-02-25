@@ -390,7 +390,7 @@ def load_from_query(service, project_id, dataset_id, target_table, source_query,
         'projectId': project_id,
         'configuration': {
             'query': {
-                'allowLargerResults': 'True',
+                'allowLargeResults': 'True',
                 'flattenResults': 'True', # [Experimental] Flattens all nested and repeated fields in the query results. The default value is true. allowLargeResults must be true if this is set to false.
                 'destinationTable': {
                     'projectId': project_id,
