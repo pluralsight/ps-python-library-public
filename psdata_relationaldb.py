@@ -68,27 +68,32 @@ def insert_list_to_sql_batch(connection,lst,tableName,batchsize=1000):
             None
     """ 
     insertvals = ''
-    batchcnt = batchsize
+    batchcnt = 0
+    lstcnt = 0
+    lstsize = len(lst)
     rowstr = 'SELECT '
     for row in lst:
-        if batchcnt > 0:
+        if batchcnt == batchsize or lstcnt == lstsize:
             for val in row:
-                if type(val) == int:
+                if type(val) == int or val == 'null':
                     rowstr += str(val) +','
                 else:
                     rowstr += "'" + str(val) + "',"
             insertvals = insertvals + rowstr[:-1] + ' UNION ALL '
-            rowstr = 'SELECT '
-            batchcnt -= 1
-        elif insertvals == '':
-            break
-        else:
             c = run_sql(connection,"INSERT INTO {0} {1}".format(tableName, insertvals[:-11]))
             insertvals = ''
-            batchcnt = batchsize
-    
-    if batchcnt != 0:
-        c = run_sql(connection,"INSERT INTO {0} {1}".format(tableName, insertvals[:-11]))
+            rowstr = 'SELECT '
+            batchcnt = 0
+        else:
+            for val in row:
+                    if type(val) == int or val == 'null':
+                        rowstr += str(val) +','
+                    else:
+                        rowstr += "'" + str(val) + "',"
+            insertvals = insertvals + rowstr[:-1] + ' UNION ALL '
+            rowstr = 'SELECT '
+            batchcnt += 1
+            lstcnt += 1
 
     return
 
@@ -291,7 +296,10 @@ def process_datarow_to_list(data_list, schema_list, connection, table):
         load_list = []
         for j, val in enumerate(i):
             if 'int' in schema_list[j][1]:
-                load_list.append(int(val))
+                if val == 'null':
+                    load_list.append('null')
+                else:
+                    load_list.append(int(val))
             elif 'date' in schema_list[j][1]:
                 load_list.append(str(val)[:19])
             else:
@@ -299,3 +307,11 @@ def process_datarow_to_list(data_list, schema_list, connection, table):
         insert_list.append(load_list)
 
     insert_list_to_sql_batch(connection, insert_list, table,100)
+
+
+
+
+
+
+
+
