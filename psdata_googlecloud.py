@@ -188,6 +188,71 @@ def cloudstorage_download(service, project_id, bucket, source_file, dest_file, s
         print('Download complete')
 
 
+def cloudstorage_delete(service, project_id, bucket, filename, show_status_messages=True):
+    """Delete file from a Cloud Storage bucket.
+
+    Args:
+        service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+        project_id: string, Name of Google project
+        bucket: string, Name of Cloud Storage bucket (exclude the "gs://" prefix)
+        file: string, Path to the file to delete on Cloud Storage
+
+    Returns:
+        None
+    """
+
+    bucket_name = bucket
+    object_name = filename
+    
+    if show_status_messages:
+        print('Delete request for {0}/{1}'.format(bucket_name,object_name))
+
+    obj = service.objects()
+    result = obj.delete(bucket = bucket_name, object = object_name).execute()
+
+    #if show_status_messages:
+        #print result
+        #print('{0}/{1} deleted'.format(bucket_name,object_name))
+
+
+def gsutil_download(service,source_path,source_file, dest_path, parallel=True):
+    """Download file(s) from Google Cloud Storage using gsutil command (must be installed on machine)
+        Args:
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            source_file: string, Path to the file to download (include * as wildcard for multiple files)
+            dest_path: string, Name or path for the downloaded file(s)
+            parallel: True (default) to run multiple file download in parallel
+
+        Returns:
+            None
+    """
+    from subprocess import call
+    #strftime("%Y_%m_%d")
+    if parallel:
+        parallel_param = '-m'
+    else:
+        parallel_param = ''
+    call(["gsutil", parallel_param, "cp", source_path + source_file, dest_path])
+
+
+def gsutil_delete(service, path, parallel=True):
+    """Delete file(s) from Google Cloud Storage using gsutil command (must be installed on machine)
+        Args:
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            path: string, Name for the file(s) to delete (* as wildcard for multiple files)
+            parallel: True (default) to run multiple file delete in parallel
+
+        Returns:
+            None
+    """
+    from subprocess import call
+    #strftime("%Y_%m_%d")
+    if parallel:
+        parallel_param = '-m'
+    else:
+        parallel_param = ''
+    call(["gsutil", parallel_param, "rm", path])
+
 def delete_table(service, project_id,dataset_id,table):
     """Delete a BigQuery table.
 
@@ -401,6 +466,51 @@ def load_from_query(service, project_id, dataset_id, target_table, source_query,
                 'writeDisposition': write_disposition, # [Optional] Specifies the action that occurs if the destination table already exists. The following values are supported: WRITE_TRUNCATE: If the table already exists, BigQuery overwrites the table data. WRITE_APPEND: If the table already exists, BigQuery appends the data to the table. WRITE_EMPTY: If the table already exists and contains data, a 'duplicate' error is returned in the job result. The default value is WRITE_EMPTY. Each action is atomic and only occurs if BigQuery is able to complete the job successfully. Creation, truncation and append actions occur as one atomic update upon job completion.
                 'createDisposition': 'CREATE_IF_NEEDED', # [Optional] Specifies whether the job is allowed to create new tables. The following values are supported: CREATE_IF_NEEDED: If the table does not exist, BigQuery creates the table. CREATE_NEVER: The table must already exist. If it does not, a 'notFound' error is returned in the job result. The default value is CREATE_IF_NEEDED. Creation, truncation and append actions occur as one atomic update upon job completion.
                 'query':source_query,    
+            },
+        },
+    }
+
+    response = job_collection.insert(projectId=project_id, body=job_data).execute()
+    #print response
+    job_status_loop(project_id,job_collection,response)
+
+
+def export_table(service, project_id, dataset_id, source_table, destination_uris, compress = False, delimiter = '\t', print_header = True):
+    """Export BigQuery table to file(s)
+        Args:
+            service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
+            project_id: string, Name of google project
+            dataset_id: string, Name of dataset for the destination table
+            source_table: string, Name of table to export to files
+            destination_uris: list, Path(s) where data will be saved (include * to allow multiple files)
+            compress: optional, True to do gzip compression
+            delimiter: string, Defaults to tab delimited '\t'
+
+        Returns:
+            None
+    """    
+    job_collection = service.jobs()
+
+    if compress:
+        compression = 'GZIP'
+    else:
+        compression = 'NONE'
+    
+    destination_format = 'CSV'
+
+    job_data = {
+        'projectId': project_id,
+        'configuration': {
+            'extract': {
+                'destinationUris': destination_uris,
+                'compression': compression,
+                'fieldDelimiter': delimiter,
+                'printHeader': print_header,
+                'sourceTable': {
+                    'projectId': project_id,
+                    'datasetId': dataset_id,
+                    'tableId': source_table,
+                },   
             },
         },
     }
