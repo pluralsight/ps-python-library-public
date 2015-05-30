@@ -109,7 +109,10 @@ def run_sql(connection,query): #courseTagDict
             cursor object, Results of the call to pyodb.connection().cursor().execute(query)
     """ 
     cursor=connection.cursor()
-    cursor.execute(query.encode('utf-8'))
+    try:
+        cursor.execute(query.encode('utf-8'))
+    except UnicodeDecodeError:
+        cursor.execute(query)
     connection.commit()
 
     return cursor
