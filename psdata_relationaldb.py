@@ -73,7 +73,7 @@ def insert_list_to_sql_batch(connection,lst,tableName,batchsize=1000):
     lstsize = len(lst)
     rowstr = 'SELECT '
     for row in lst:
-        if batchcnt == batchsize or lstcnt == lstsize:
+        if batchcnt == batchsize or (lstcnt + 1) == lstsize:
             for val in row:
                 if type(val) == int or val == 'null':
                     rowstr += str(val) +','
