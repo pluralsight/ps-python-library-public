@@ -59,7 +59,7 @@ def process_data_row(row,schema_list):
                     result_dct[k] = True
                 elif row[i] is not None:
                     result_dct[k] = False
-                else: result_dtc[k] = None
+                else: result_dct[k] = None
             else:
                 if row[i] is None or row[i]=="":
                     result_dct[k] = None
