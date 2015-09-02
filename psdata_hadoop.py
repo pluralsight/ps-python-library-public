@@ -9,7 +9,7 @@ import MySQLdb
 from impala.dbapi import connect
 import pexpect
 
-def run_impala_cmd(user, pw, cmd, hostname='172.16.100.230'):
+def run_impala_cmd(user, pw, cmd, hostname):
 	"""run impala command through cli
 
 	    Args:
@@ -73,6 +73,7 @@ def full_mssql_table_sqoop(table , sqlserver, sqldb, sqlconfig, config,cred_file
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
 	password = db_info[config]['password']
+	datanode = db_info[config]['datanode']
 	sqlusername = db_info[sqlconfig]['username']
 	sqlpw = db_info[sqlconfig]['password']
 	sqlconnection = pyodbc.connect('DRIVER={FreeTDS};SERVER='+sqlserver.encode('utf-8')+';PORT=1433;DATABASE='+sqldb.encode('utf-8')+';UID='+sqlusername.encode('utf-8')+';PWD='+sqlpw.encode('utf-8'))
@@ -90,7 +91,7 @@ def full_mssql_table_sqoop(table , sqlserver, sqldb, sqlconfig, config,cred_file
 			truncate_and_load(cursor,table[0][0],database,table[0][0],sqldb,sqlserver,sqlusername,sqlpw,sqlschema)
 		else:
 			truncate_and_load_pk(cursor,table[0][0],database,table[0][0],sqldb,sqlserver,sqlusername,sqlpw,sqlschema)
-	run_impala_cmd(username, password, 'invalidate metadata')
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 	# cursor.execute('drop table '+database+'.'+table)
 	# subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
 	# 	            sqldb+';username='+sqlusername+';password='+sqlpw+'" --table '+table+
@@ -215,10 +216,11 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 
 	username = db_info[config]['username']
 	password = db_info[config]['password']
+	datanode = db_info[config]['datanode']
 	sqlusername = db_info[sqlconfig]['username']
 	sqlpw = db_info[sqlconfig]['password']
 	sqlconnection = pyodbc.connect('DRIVER={FreeTDS};SERVER='+sqlserver.encode('utf-8')+';PORT=1433;DATABASE='+sqldb.encode('utf-8')+';UID='+sqlusername.encode('utf-8')+';PWD='+sqlpw.encode('utf-8'))
-	impala_connection = connect(host=impalahost, port=21050)
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+password+';SSL=1;AuthMech=3;Database=default',autocommit=True)
 	connection = hive_connect('default', username, password)
 	sqlcursor = sqlconnection.cursor()
 	cursor = connection.cursor()
@@ -268,7 +270,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 16 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
 		else:
 			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 1 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
-	refresh_impala_metadata()
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 	subprocess.call("sudo -u hdfs hive -e 'insert into table "+hivedb+"."+sqltable+ " select * from "+hivedb+"."+sqltable+"_incremental'",shell=True)
 	try:
 		subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable+"_incremental/*",shell=True)
@@ -276,7 +278,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 		print 'folder empty'
 
 	impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
-	run_impala_cmd(username, password, 'invalidate metadata')
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 
 def mysql_incremental_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysqlserver, mysqlusr, mysqlpw):
 	"""drops table and reloads it in hive
@@ -372,6 +374,7 @@ def full_database_sqoop(sqlserver, sqldb, sqlconfig, config,cred_file, hiveserve
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
 	password = db_info[config]['password']
+	datanode = db_info[config]['datanode']
 	sqlusername = db_info[sqlconfig]['username']
 	sqlpw = db_info[sqlconfig]['password']
 	sqlconnection = pyodbc.connect('DRIVER={FreeTDS};SERVER='+sqlserver.encode('utf-8')+';PORT=1433;DATABASE='+sqldb.encode('utf-8')+';UID='+sqlusername.encode('utf-8')+';PWD='+sqlpw.encode('utf-8'))
@@ -388,7 +391,7 @@ def full_database_sqoop(sqlserver, sqldb, sqlconfig, config,cred_file, hiveserve
 			truncate_and_load(cursor,table[0],database,table[0],sqldb,sqlserver,sqlusername,sqlpw,table[2])
 		else:
 			truncate_and_load_pk(cursor,table[0],database,table[0],sqldb,sqlserver,sqlusername,sqlpw,table[2])
-	run_impala_cmd(username, password, 'invalidate metadata')
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 
 def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiveserver='localhost', database='default'):
 	"""truncates and loads full database in mysql into hive
@@ -409,6 +412,7 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
 	password = db_info[config]['password']
+	datanode = db_info[config]['datanode']
 	mysqlusername = db_info[mysqlconfig]['username']
 	mysqlpw = db_info[mysqlconfig]['password']
 	mysqlconnection = MySQLdb.connect(
@@ -426,7 +430,7 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 	tablelist = mysqlcursor.fetchall()
 	for table in tablelist:
 		mysql_truncate_and_load(cursor,table[0],database,table[0],mysqldb,mysqlserver,mysqlusername,mysqlpw)
-	run_impala_cmd(username, password, 'invalidate metadata')
+	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 
 
 
