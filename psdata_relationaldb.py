@@ -248,7 +248,7 @@ def cursor_to_json(cursor, dest_file, dest_schema_file=None, source_schema_file=
             result_dct = process_data_row(row,schema)
             outfile.write("%s\n" % json.dumps(result_dct, default=_defaultencode))
 
-def load_csv_to_table(table ,schema_file ,csv_file, server, database, config,cred_file='config/dblogin.config',skipfirstrow=1):
+def load_csv_to_table(table ,schema_file ,csv_file, server, database, config,cred_file='~/configs/dblogin.config',skipfirstrow=1):
     """Takes csv file, schema file, with sql server connection params and inserts data to a specified table
 
     Args:
