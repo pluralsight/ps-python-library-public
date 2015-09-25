@@ -323,8 +323,8 @@ def list_datasets(service, project_id):
     return dataset_list
 
 
-def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV,field_list,delimiter='|',skipLeadingRows=0):
-    """[UNDER CONSTRUCTION - may not work properly] Loads a table in BigQuery from a CSV file.
+def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV,field_list=None,delimiter='\t',skipLeadingRows=0, overwrite=False):
+    """Loads a table in BigQuery from a delimited file (default is tab delimited).
 
     Args:
         service: BigQuery service object that is authenticated.  Example: service = build('bigquery','v2', http=http)
@@ -333,28 +333,40 @@ def load_table_from_file(service, project_id, dataset_id, targettable, sourceCSV
         targettable: string, Name of table to create or append data to
         sourceCSV: string, Path of the file to load
         field_list: list, Schema of the file to be loaded
-        delimiter: string, Column delimiter for file, default is | (optional)
+        delimiter: string, Column delimiter for file, default is tab (optional)
         skipLeadingRows: integer, Number of rows to skip, default is 0 (optional)
+        overwrite: boolean, defaults to False which will append data to table, True would overwrite
 
     Returns:
         Returns job response object.  Prints out job status every 10 seconds.
     """
     
     jobCollection = service.jobs()
-        
+    
+     # Set if overwriting or appending to table
+    if overwrite:
+        write_disposition = 'WRITE_TRUNCATE'
+    else:
+        write_disposition = 'WRITE_APPEND'
+
     jobData = {
         'projectId': project_id,
         'configuration': {
             'load': {
               'sourceUris': [sourceCSV],
               'fieldDelimiter': delimiter,
-              'schema': schema,
+              'schema':
+                { 
+                    'fields': field_list
+                },
             'destinationTable': {
               'projectId': project_id,
               'datasetId': dataset_id,
               'tableId': targettable
             },
-            'skipLeadingRows': skipLeadingRows
+            'skipLeadingRows': skipLeadingRows,
+            'createDisposition': 'CREATE_IF_NEEDED',
+            'writeDisposition': write_disposition,
           }
         }
       }
