@@ -9,6 +9,10 @@ import MySQLdb
 from impala.dbapi import connect
 import pexpect
 
+username = ''
+password = ''
+datanode = ''
+
 def run_impala_cmd(user, pw, cmd, hostname):
 	"""run impala command through cli
 
@@ -69,6 +73,10 @@ def full_mssql_table_sqoop(table , sqlserver, sqldb, sqlconfig, config,cred_file
 	Returns:
 	    None
 	"""
+	global username
+	global password
+	global datanode
+
 	with open(cred_file,'rb') as cred:
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
@@ -116,14 +124,20 @@ def truncate_and_load(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, sql
 	    None
 	"""
 
+	global username
+	global password
+	global datanode
+
 	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
 	delete_hdfs_files(hivedb,hivetable)
+	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 	subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
 		            sqldb+';username='+sqlusr+';password='+sqlpw+'" --table '+sqltable+
 		            ' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb
 		            +' --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
 
-def truncate_and_load(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, sqlusr, sqlpw, sqlschema='dbo'):
+
+def mysql_truncate_and_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysqlserver, mysqlusr, mysqlpw,port='3306'):
 	"""drops table and reloads it in hive
 
 	Args:
@@ -141,36 +155,15 @@ def truncate_and_load(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, sql
 	    None
 	"""
 
-	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
-	delete_hdfs_files(hivedb,hivetable)
-	subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
-		            sqldb+';username='+sqlusr+';password='+sqlpw+'" --table '+sqltable+
-		            ' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb
-		            +' --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
-
-
-def mysql_truncate_and_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysqlserver, mysqlusr, mysqlpw):
-	"""drops table and reloads it in hive
-
-	Args:
-	    cursor: pyhs2 cursor to execute hive commands
-	    hivetable: table name to load in hive
-	    hivedb: hive db to load table
-	    sqltable: sql table to load
-	    sqldb: sql database to load
-	    sqlserver: ip address of sql server
-	    sqlusr: sql username
-	    sqlpw: sql password
-	    sqlschema: schema of sql table
-
-	Returns:
-	    None
-	"""
+	global username
+	global password
+	global datanode
 
 	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
 	delete_hdfs_files(hivedb,hivetable)
-	print 'sudo -u hdfs sqoop import --connect jdbc:mysql://'+mysqlserver+':3306/'+mysqldb+' --username '+mysqlusr+' --password "'+mysqlpw+'" --table '+mysqltable+' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb+' --compression-codec org.apache.hadoop.io.compress.SnappyCodec'
-	subprocess.call("sudo -u hdfs sqoop import --connect jdbc:mysql://"+mysqlserver+":3306/"+mysqldb+" --username "+mysqlusr+" --password '"+mysqlpw+"' --table "+mysqltable+
+	run_impala_cmd(username, password, 'invalidate metadata', datanode)
+	print 'sudo -u hdfs sqoop import --connect jdbc:mysql://'+mysqlserver+':'+port+'/'+mysqldb+' --username '+mysqlusr+' --password "'+mysqlpw+'" --table '+mysqltable+' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb+' --compression-codec org.apache.hadoop.io.compress.SnappyCodec'
+	subprocess.call("sudo -u hdfs sqoop import --connect jdbc:mysql://"+mysqlserver+":"+port+"/"+mysqldb+" --username "+mysqlusr+" --password '"+mysqlpw+"' --table "+mysqltable+
 		            " --as-parquetfile --hive-import -m 1 --hive-database "+hivedb
 		            +" --compression-codec org.apache.hadoop.io.compress.SnappyCodec",shell=True)
 
@@ -191,25 +184,9 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	Returns:
 	    None
 	"""
-
-	# mssql_incremental_load('usersubshistory','source','usersubshistory','source','sourcefiledate','172.16.100.38','datahub','satchmo',pk=True)
-	# import pyodbc
-	# import json
-	# from psdata_hadoop import hive_connect
-	# import subprocess
-	# from impala.dbapi import connect
-	# cred_file = '/home/ec2-user/configs/dblogin.config'
-	# sqlschema = 'dbo'
-	# config = 'datahub'
-	# hivetable = 'usersubshistory'
-	# hivedb = 'source'
-	# sqltable = 'usersubshistory'
-	# sqldb = 'source'
-	# icol = 'sourcefiledate'
-	# sqlserver = '172.16.100.38'
-	# sqlconfig = 'satchmo'
-	# hiveserver = 'localhost'
-	# impalahost = 'ip-172-16-100-230.us-west-2.compute.internal'
+	global username
+	global password
+	global datanode
 
 	with open(cred_file,'rb') as cred:
 		db_info = json.loads(cred.read())
@@ -253,7 +230,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	if id_datatype != 'int' and 'id' not in icol:
 		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
 		try:
-			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable+"_incremental/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
 		except OSError:
 			print 'folder empty'
 		if pk == True:
@@ -263,7 +240,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	else:
 		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
 		try:
-			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable+"_incremental/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
 		except OSError:
 			print 'folder empty'
 		if pk == True:
@@ -273,7 +250,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 	subprocess.call("sudo -u hdfs hive -e 'insert into table "+hivedb+"."+sqltable+ " select * from "+hivedb+"."+sqltable+"_incremental'",shell=True)
 	try:
-		subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable+"_incremental/*",shell=True)
+		subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
 	except OSError:
 		print 'folder empty'
 
@@ -321,9 +298,13 @@ def truncate_and_load_pk(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, 
 	Returns:
 	    None
 	"""
+	global username
+	global password
+	global datanode
 
 	cursor.execute('drop table '+hivedb+'.'+hivetable+ ' purge')
 	delete_hdfs_files(hivedb,hivetable)
+	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 	subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
 		            sqldb+';username='+sqlusr+';password='+sqlpw+'" --table '+sqltable+
 		            ' --as-parquetfile --hive-import -m 16 --hive-database '+hivedb
@@ -370,6 +351,11 @@ def full_database_sqoop(sqlserver, sqldb, sqlconfig, config,cred_file, hiveserve
 	Returns:
 	    None
 	"""
+
+	global username
+	global password
+	global datanode
+
 	with open(cred_file,'rb') as cred:
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
@@ -393,7 +379,7 @@ def full_database_sqoop(sqlserver, sqldb, sqlconfig, config,cred_file, hiveserve
 			truncate_and_load_pk(cursor,table[0],database,table[0],sqldb,sqlserver,sqlusername,sqlpw,table[2])
 	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 
-def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiveserver='localhost', database='default'):
+def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiveserver='localhost', database='default',port='3306'):
 	"""truncates and loads full database in mysql into hive
 
 	Args:
@@ -408,6 +394,11 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 	Returns:
 	    None
 	"""
+
+	global username
+	global password
+	global datanode
+
 	with open(cred_file,'rb') as cred:
 		db_info = json.loads(cred.read())
 	username = db_info[config]['username']
@@ -417,7 +408,7 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 	mysqlpw = db_info[mysqlconfig]['password']
 	mysqlconnection = MySQLdb.connect(
     host=mysqlserver,
-    port=3306,
+    port=int(port),
     user=mysqlusername,
     passwd=mysqlpw,
     use_unicode=True,
@@ -429,7 +420,7 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 	cursor.execute('create database if not exists '+database)
 	tablelist = mysqlcursor.fetchall()
 	for table in tablelist:
-		mysql_truncate_and_load(cursor,table[0],database,table[0],mysqldb,mysqlserver,mysqlusername,mysqlpw)
+		mysql_truncate_and_load(cursor,table[0],database,table[0],mysqldb,mysqlserver,mysqlusername,mysqlpw,port=port)
 	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 
 

@@ -73,7 +73,7 @@ def insert_list_to_sql_batch(connection,lst,tableName,batchsize=1000):
     lstsize = len(lst)
     rowstr = 'SELECT '
     for row in lst:
-        if batchcnt == batchsize or (lstcnt + 1) == lstsize:
+        if batchcnt == batchsize or lstcnt == lstsize:
             for val in row:
                 if type(val) == int or val == 'null':
                     rowstr += str(val) +','
@@ -95,6 +95,9 @@ def insert_list_to_sql_batch(connection,lst,tableName,batchsize=1000):
             batchcnt += 1
             lstcnt += 1
 
+    if batchcnt > 0:
+        c = run_sql(connection,"INSERT INTO {0} {1}".format(tableName, insertvals[:-11]))
+
     return
 
 
@@ -109,10 +112,7 @@ def run_sql(connection,query): #courseTagDict
             cursor object, Results of the call to pyodb.connection().cursor().execute(query)
     """ 
     cursor=connection.cursor()
-    try:
-        cursor.execute(query.encode('utf-8'))
-    except UnicodeDecodeError:
-        cursor.execute(query)
+    cursor.execute(query.encode('utf-8'))
     connection.commit()
 
     return cursor
@@ -248,7 +248,7 @@ def cursor_to_json(cursor, dest_file, dest_schema_file=None, source_schema_file=
             result_dct = process_data_row(row,schema)
             outfile.write("%s\n" % json.dumps(result_dct, default=_defaultencode))
 
-def load_csv_to_table(table ,schema_file ,csv_file, server, database, config,cred_file='~/configs/dblogin.config',skipfirstrow=1):
+def load_csv_to_table(table ,schema_file ,csv_file, server, database, config,cred_file='config/dblogin.config',skipfirstrow=1):
     """Takes csv file, schema file, with sql server connection params and inserts data to a specified table
 
     Args:
