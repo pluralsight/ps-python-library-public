@@ -299,7 +299,7 @@ def process_datarow_to_list(data_list, schema_list, connection, table):
         load_list = []
         for j, val in enumerate(i):
             if 'int' in schema_list[j][1]:
-                if val == 'null':
+                if val == 'null' or val == '':
                     load_list.append('null')
                 else:
                     load_list.append(int(val))

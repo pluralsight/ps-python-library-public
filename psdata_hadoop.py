@@ -9,7 +9,7 @@ import MySQLdb
 from impala.dbapi import connect
 import pexpect
 
-def run_impala_cmd(user, pw, cmd, hostname):
+def run_impala_cmd(user, pw, cmd, hostname, timeout=120):
 	"""run impala command through cli
 
 	    Args:
@@ -26,7 +26,26 @@ def run_impala_cmd(user, pw, cmd, hostname):
 	child.logfile_read = sys.stdout
 	child.expect('LDAP password for '+user+':')
 	child.sendline(pw)
-	child.expect(pexpect.EOF)
+	child.expect(pexpect.EOF, timeout=timeout)
+
+def impala_query_to_file(user, pw, cmd, hostname, filename, delimiter = '\t', timeout=120):
+	"""run impala command through cli
+
+	    Args:
+	        user: impala username
+	        pw: password
+	        cmd: command you want run
+	        hostname: datanode where impala instance resides
+
+	    Returns:
+	        nothing
+	"""
+	print "impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l"
+	child = pexpect.spawn("impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l -B -o " + filename + " '--output_delimiter=" + delimiter + "'")
+	child.logfile_read = sys.stdout
+	child.expect('LDAP password for '+user+':')
+	child.sendline(pw)
+	child.expect(pexpect.EOF, timeout=timeout)
 
 def hive_connect(database, username, password,server='localhost'):
 	"""Build pyhs2 connection to hive from file

@@ -17,7 +17,8 @@ logging.basicConfig() #included to avoid message when oauth2client tries to writ
 # for more on the API... https://developers.google.com/resources/api-libraries/documentation/bigquery/v2/python/latest/
 
 # Number of bytes to send/receive in each request.
-CHUNKSIZE = 2 * 1024 * 1024
+CHUNKSIZE = 16 * (256 * 1024) #must be multiple of 256KB which is the calc in parenthesis
+#old setting CHUNKSIZE = 2 * 1024 * 1024
 # Retry transport and file IO errors.
 RETRYABLE_ERRORS = (httplib2.HttpLib2Error, IOError)
 # Mimetype to use if one can't be guessed from the file extension.
