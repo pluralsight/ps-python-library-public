@@ -13,6 +13,20 @@ username = ''
 password = ''
 datanode = ''
 
+def create_parquet_table(tabletotransform,destinationtablename):
+	"""makes view or table into parquet format managed table in impala
+
+	    Args:
+	        tabletotransform: is database.table/view name to tranform
+	        destinationtablename: is the table landing managed parquet table
+
+	    Returns:
+	        nothing
+	"""
+	subprocess.call('sudo -su hdfs hive -e "drop table if exists '+destinationtablename+'"',shell=True)
+	subprocess.call("sudo -su hdfs hive -e \"create table "+destinationtablename+" stored as parquet tblproperties('parquet.compression'='SNAPPY') as select * from "+tabletotransform+"\"",shell=True)
+
+
 def run_impala_cmd(user, pw, cmd, hostname):
 	"""run impala command through cli
 
@@ -25,9 +39,51 @@ def run_impala_cmd(user, pw, cmd, hostname):
 	    Returns:
 	        nothing
 	"""
-	print "impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l"
-	child = pexpect.spawn("impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l")
+
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+hostname+';PORT=21050;UID='+user+';PWD='+pw+';AuthMech=3;Database=default',autocommit=True)
+	impala_cursor = impala_connection.cursor()
+	impala_cursor.execute(cmd+';')
+	# print "impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l"
+	# child = pexpect.spawn("impala-shell -i '"+hostname+"' -q '"+cmd+"' -u '"+user+ "' -l")
+	# child.logfile_read = sys.stdout
+	# child.expect('LDAP password for '+user+':')
+	# child.sendline(pw)
+	# child.expect(pexpect.EOF)
+
+def run_compute_stats_bg(user, pw, db, table, hostname):
+	"""runs compute stat command in background for table
+
+	    Args:
+	        user: impala username
+	        pw: password
+	        db: database that table belongs to
+	        table: impala table to refresh stats
+	        hostname: datanode where impala instance resides
+
+	    Returns:
+	        nothing
+	"""
+
+	subprocess.call('cd /home/ec2-user/PyETL && /usr/local/bin/python -c "from psdata_hadoop import *; run_impala_cmd(\''+user+'\',\''+pw+'\',\'compute stats '+db+'.'+table+'\',\''+hostname+'\')" &',shell=True)
+	subprocess.call('cd ~',shell=True)
+
+def run_impala_cmd_from_file(user, pw, filepath, hostname,timeout=10000):
+	"""run impala command through cli using a file
+
+	    Args:
+	        user: impala username
+	        pw: password
+	        filepath: the full filepath of file to execute
+	        hostname: datanode where impala instance resides
+
+	    Returns:
+	        nothing
+	"""
+
+	print "impala-shell -i '"+hostname+"' -f '"+filepath+"' -u '"+user+ "' -l"
+	child = pexpect.spawn("impala-shell -i '"+hostname+"' -f '"+filepath+"' -u '"+user+ "' -l")
 	child.logfile_read = sys.stdout
+	child.timeout=timeout
 	child.expect('LDAP password for '+user+':')
 	child.sendline(pw)
 	child.expect(pexpect.EOF)
@@ -55,6 +111,72 @@ def hive_connect(database, username, password,server='localhost'):
 		print "Error creating database connection", e
 
 	return connection
+
+def make_dt_table(table, database):
+	global username
+	global password
+	global datanode
+
+	table = table.encode('utf-8')
+	database = database.encode('utf-8')
+	drop_str = 'drop table if exists '+database+'.'+table + ';'
+	ins_str = 'create table ' +database+'.'+table+ ' stored as parquet tblproperties(\'parquet.compression\'=\'SNAPPY\') as select '
+	hive_str = 'from ' + database + '.' + table + '_stg stg insert overwrite table ' + database +'.'+ table + ' select '
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+password+';AuthMech=3;Database=default',autocommit=True)
+	impala_cursor = impala_connection.cursor()
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
+	impala_cursor.execute('show column stats '+database+'.'+table+'_stg')
+	collist = impala_cursor.fetchall()
+	for a in collist:
+		# print a[0],a[1]
+		if 'BIGINT' == a[1] and 'id' not in a[0]:
+			ins_str = ins_str + ' cast((' + a[0] +')/1000 as timestamp) as `'+a[0]+'_dt`, `' + a[0] + '`,'
+		elif 'BINARY' == a[1]:
+			continue
+		else:
+			ins_str = ins_str + ' `' + a[0] + '`,'
+			# to_date(cast((minstart)/1000 as timestamp))
+
+	# ins_str = ins_str[:-1] + ' from ' + database + '.' + table + '_stg; drop table if exists ' +database+'.'+table+'_stg;'
+	hive_str = hive_str + ins_str[:-1].split('as select')[1] + ';'
+	ins_str = ins_str[:-1] + ' from ' + database + '.' + table + '_stg limit 0;'
+	drop2_str = 'drop table if exists ' +database+'.'+table+'_stg;'
+	print drop_str, ins_str, drop2_str
+	try:
+		impala_cursor.execute(drop_str.encode('utf-8'))
+		delete_hdfs_files(database,table)
+		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		# 'creating blank table \n', ins_str
+		impala_cursor.execute((ins_str).encode('utf-8'))
+		# print 'loading table using hive \n', ('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`')
+		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		subprocess.call(('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`'),shell=True)
+		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		impala_cursor.execute(drop2_str.encode('utf-8'))
+		delete_hdfs_files(database,table+'_stg')
+		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		run_compute_stats_bg(username,password,database,table,datanode)
+	except pyodbc.Error as e:
+		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		print 'Couldnt Load table \n', e, '\n', 'ran this query:\n', drop_str, ins_str, drop2_str,'\n','table: '+table, 'database: '+database
+		print 'retrying again\n'
+		try:
+			impala_cursor.execute(drop_str.encode('utf-8'))
+			delete_hdfs_files(database,table)
+			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			# 'creating blank table \n', ins_str
+			impala_cursor.execute((ins_str).encode('utf-8'))
+			# print 'loading table using hive \n', ('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`')
+			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			subprocess.call(('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`'),shell=True)
+			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			impala_cursor.execute(drop2_str.encode('utf-8'))
+			delete_hdfs_files(database,table+'_stg')
+			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			run_compute_stats_bg(username,password,database,table,datanode)			
+		except:
+			print 'Couldnt Load table \n', e, '\n', 'ran this query:\n', drop_str, ins_str, drop2_str,'\n','table: '+table, 'database: '+database
+			print 'Failed Attempt 2'
 
 def full_mssql_table_sqoop(table , sqlserver, sqldb, sqlconfig, config,cred_file, hiveserver='localhost', database='default',sqlschema='dbo',view=False):
 	"""Gets table from sql server and sqoops it to hive
@@ -128,13 +250,15 @@ def truncate_and_load(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, sql
 	global password
 	global datanode
 
-	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
-	delete_hdfs_files(hivedb,hivetable)
+	cursor.execute('drop table '+hivedb+'.'+hivetable + '_stg purge')
+	delete_hdfs_files(hivedb,hivetable+'_stg')
 	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 	subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
 		            sqldb+';username='+sqlusr+';password='+sqlpw+'" --table '+sqltable+
-		            ' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb
-		            +' --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
+		            ' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb  + ' --hive-table ' + sqltable
+		            +'_stg --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
+
+	make_dt_table(sqltable, hivedb)
 
 
 def mysql_truncate_and_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysqlserver, mysqlusr, mysqlpw,port='3306'):
@@ -159,13 +283,16 @@ def mysql_truncate_and_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysq
 	global password
 	global datanode
 
-	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
-	delete_hdfs_files(hivedb,hivetable)
-	run_impala_cmd(username, password, 'invalidate metadata', datanode)
+	cursor.execute('drop table '+hivedb+'.'+hivetable + '_stg purge')
+	delete_hdfs_files(hivedb,hivetable+'_stg')
+	print username, password, datanode
+	run_impala_cmd(username, password, 'invalidate metadata',datanode)
 	print 'sudo -u hdfs sqoop import --connect jdbc:mysql://'+mysqlserver+':'+port+'/'+mysqldb+' --username '+mysqlusr+' --password "'+mysqlpw+'" --table '+mysqltable+' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb+' --compression-codec org.apache.hadoop.io.compress.SnappyCodec'
 	subprocess.call("sudo -u hdfs sqoop import --connect jdbc:mysql://"+mysqlserver+":"+port+"/"+mysqldb+" --username "+mysqlusr+" --password '"+mysqlpw+"' --table "+mysqltable+
-		            " --as-parquetfile --hive-import -m 1 --hive-database "+hivedb
-		            +" --compression-codec org.apache.hadoop.io.compress.SnappyCodec",shell=True)
+		            " --as-parquetfile --hive-import -m 1 --hive-database "+hivedb + ' --hive-table ' + mysqltable
+		            +"_stg --compression-codec org.apache.hadoop.io.compress.SnappyCodec",shell=True)
+
+	make_dt_table(mysqltable, hivedb)
 
 def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, config, sqlconfig, impalahost='ip-172-16-100-230.us-west-2.compute.internal',sqlschema='dbo', cred_file='/home/ec2-user/configs/dblogin.config', pk=False):
 	"""incrementally loads table from ms sql server into hive
@@ -184,6 +311,7 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	Returns:
 	    None
 	"""
+
 	global username
 	global password
 	global datanode
@@ -197,17 +325,17 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	sqlusername = db_info[sqlconfig]['username']
 	sqlpw = db_info[sqlconfig]['password']
 	sqlconnection = pyodbc.connect('DRIVER={FreeTDS};SERVER='+sqlserver.encode('utf-8')+';PORT=1433;DATABASE='+sqldb.encode('utf-8')+';UID='+sqlusername.encode('utf-8')+';PWD='+sqlpw.encode('utf-8'))
-	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+password+';SSL=1;AuthMech=3;Database=default',autocommit=True)
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+password+';AuthMech=3;Database=default',autocommit=True)
 	connection = hive_connect('default', username, password)
 	sqlcursor = sqlconnection.cursor()
 	cursor = connection.cursor()
 	impala_cursor = impala_connection.cursor()
-	impala_cursor.execute("Select max("+icol+") from "+hivedb+"."+sqltable)
+	impala_cursor.execute("Select max("+icol+") from "+hivedb+"."+hivetable)
 	maxval = impala_cursor.fetchall()
 	maxval = maxval[0][0]
-	impala_cursor.execute('describe '+hivedb+'.'+sqltable)
+	impala_cursor.execute('describe '+hivedb+'.'+hivetable)
 	collist = impala_cursor.fetchall()
-	external_str = "create external table if not exists "+hivedb+"."+sqltable+"_incremental("
+	external_str = "create external table if not exists "+hivedb+"."+hivetable+"_incremental("
 
 	for a in collist:
 		external_str = external_str + a[0] + ' ' + a[1] +', '
@@ -229,28 +357,33 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 
 	if id_datatype != 'int' and 'id' not in icol:
 		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
+		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental_stg')
 		try:
-			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+hivetable.lower()+"_incremental_stg/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+hivetable.lower()+"_incremental/*",shell=True)
 		except OSError:
 			print 'folder empty'
 		if pk == True:
-			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 16 --as-parquetfile --split-by '+icol+ ' --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > \''+str(maxval)[:-3]+'\' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
+			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 16 --as-parquetfile --split-by '+icol+ ' --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ hivetable +'_incremental_stg --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > \''+str(maxval)[:-3]+'\' and \$CONDITIONS\" --target-dir /etl/incremental/'+hivetable+' -- --schema '+sqlschema+' --direct', shell=True)
 		else:
-			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 1 --as-parquetfile --split-by '+icol+ ' --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > \''+str(maxval)[:-3]+'\' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
+			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 1 --as-parquetfile --split-by '+icol+ ' --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ hivetable +'_incremental_stg --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > \''+str(maxval)[:-3]+'\' and \$CONDITIONS\" --target-dir /etl/incremental/'+hivetable+' -- --schema '+sqlschema+' --direct', shell=True)
 	else:
+		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental_stg')
 		impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
 		try:
-			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+hivetable.lower()+"_incremental_stg/*",shell=True)
+			subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+hivetable.lower()+"_incremental/*",shell=True)
 		except OSError:
 			print 'folder empty'
 		if pk == True:
-			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 16 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
+			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 16 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ hivetable +'_incremental_stg --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+hivetable+' -- --schema '+sqlschema+' --direct', shell=True)
 		else:
-			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 1 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ sqltable +'_incremental --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+sqltable+' -- --schema '+sqlschema+' --direct', shell=True)
+			subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+sqldb+';username='+sqlusername+';password='+sqlpw+'" -m 1 --as-parquetfile --split-by '+icol+ '  --compression-codec org.apache.hadoop.io.compress.SnappyCodec --hive-import --hive-database '+hivedb+' --hive-table '+ hivetable +'_incremental_stg --query \"select * from ['+sqldb+'].['+sqlschema+'].['+sqltable+'] where '+icol+' > '+str(maxval)+' and \$CONDITIONS\" --target-dir /etl/incremental/'+hivetable+' -- --schema '+sqlschema+' --direct', shell=True)
 	run_impala_cmd(username, password, 'invalidate metadata',datanode)
-	subprocess.call("sudo -u hdfs hive -e 'insert into table "+hivedb+"."+sqltable+ " select * from "+hivedb+"."+sqltable+"_incremental'",shell=True)
+	make_dt_table(hivetable.lower()+"_incremental", hivedb)
+	subprocess.call("sudo -u hdfs hive -e 'insert into table "+hivedb+"."+hivetable+ " select * from "+hivedb+"."+hivetable+"_incremental'",shell=True)
 	try:
-		subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+sqltable.lower()+"_incremental/*",shell=True)
+		subprocess.call("sudo -u hdfs hadoop fs -rm /user/hive/warehouse/"+hivedb+".db/"+hivetable.lower()+"_incremental/*",shell=True)
 	except OSError:
 		print 'folder empty'
 
@@ -275,12 +408,14 @@ def mysql_incremental_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysql
 	    None
 	"""
 
-	cursor.execute('drop table '+hivedb+'.'+hivetable + ' purge')
-	delete_hdfs_files(hivedb,hivetable)
-	print 'sudo -u hdfs sqoop import --connect jdbc:mysql://'+mysqlserver+':3306/'+mysqldb+' --username '+mysqlusr+' --password "'+mysqlpw+'" --table '+mysqltable+' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb+' --compression-codec org.apache.hadoop.io.compress.SnappyCodec'
+	cursor.execute('drop table '+hivedb+'.'+hivetable + '_stg purge')
+	delete_hdfs_files(hivedb,hivetable+'_stg')
+	print 'sudo -u hdfs sqoop import --connect jdbc:mysql://'+mysqlserver+':3306/'+mysqldb+' --username '+mysqlusr+' --password "'+mysqlpw+'" --table '+mysqltable+' --as-parquetfile --hive-import -m 1 --hive-database '+hivedb+ ' --hive-table ' + mysqltable +'_stg --compression-codec org.apache.hadoop.io.compress.SnappyCodec'
 	subprocess.call("sudo -u hdfs sqoop import --connect jdbc:mysql://"+mysqlserver+":3306/"+mysqldb+" --username "+mysqlusr+" --password '"+mysqlpw+"' --table "+mysqltable+
-		            " --as-parquetfile --hive-import -m 1 --hive-database "+hivedb
-		            +" --compression-codec org.apache.hadoop.io.compress.SnappyCodec",shell=True)
+		            " --as-parquetfile --hive-import -m 1 --hive-database "+hivedb + ' --hive-table ' + mysqltable +
+		            +"_stg --compression-codec org.apache.hadoop.io.compress.SnappyCodec",shell=True)
+
+	make_dt_table(mysqltable, hivedb)
 
 def truncate_and_load_pk(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, sqlusr, sqlpw,sqlschema='dbo'):
 	"""drops table and reloads it in hive but using the primary key
@@ -302,26 +437,28 @@ def truncate_and_load_pk(cursor, hivetable, hivedb, sqltable, sqldb, sqlserver, 
 	global password
 	global datanode
 
-	cursor.execute('drop table '+hivedb+'.'+hivetable+ ' purge')
-	delete_hdfs_files(hivedb,hivetable)
+	cursor.execute('drop table '+hivedb+'.'+hivetable+ '_stg purge')
+	delete_hdfs_files(hivedb,hivetable+'_stg')
 	run_impala_cmd(username, password, 'invalidate metadata', datanode)
 	subprocess.call('sudo -u hdfs sqoop import --connect "jdbc:sqlserver://'+sqlserver+':1433;database='+
 		            sqldb+';username='+sqlusr+';password='+sqlpw+'" --table '+sqltable+
-		            ' --as-parquetfile --hive-import -m 16 --hive-database '+hivedb
-		            +' --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
+		            ' --as-parquetfile --hive-import -m 16 --hive-database '+hivedb  + ' --hive-table ' + sqltable
+		            +'_stg --compression-codec org.apache.hadoop.io.compress.SnappyCodec -- --schema '+sqlschema+' --direct',shell=True)
+
+	make_dt_table(sqltable, hivedb)
 
 def delete_hdfs_files(hivedb, t):
 	"""deletes all files in hdfs folder
 
 	Args:
 		hivedb_dest: hive database to drop table
-		t: table to drop 
+		t: table to drop
 
 	Returns:
 	    None
 	"""
 	t = t.lower()
-	subprocess.call('sudo -u hdfs hadoop fs -rm /user/hive/warehouse/'+hivedb+'.db/'+t+'/*',shell=True)
+	subprocess.call('sudo -u hdfs hadoop fs -rm -r /user/hive/warehouse/'+hivedb+'.db/'+t+'/*',shell=True)
 
 # def refresh_impala_metadata():
 # 	"""Refreshes Impalas Metadata after loading
@@ -401,6 +538,7 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 
 	with open(cred_file,'rb') as cred:
 		db_info = json.loads(cred.read())
+
 	username = db_info[config]['username']
 	password = db_info[config]['password']
 	datanode = db_info[config]['datanode']
@@ -421,7 +559,5 @@ def full_mysql_db_sqoop(mysqlserver, mysqldb, mysqlconfig, config,cred_file, hiv
 	tablelist = mysqlcursor.fetchall()
 	for table in tablelist:
 		mysql_truncate_and_load(cursor,table[0],database,table[0],mysqldb,mysqlserver,mysqlusername,mysqlpw,port=port)
+
 	run_impala_cmd(username, password, 'invalidate metadata', datanode)
-
-
-
