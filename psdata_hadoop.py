@@ -12,6 +12,7 @@ import pexpect
 username = ''
 password = ''
 datanode = ''
+retries = 0
 
 def create_parquet_table(tabletotransform,destinationtablename):
 	"""makes view or table into parquet format managed table in impala
@@ -116,6 +117,7 @@ def make_dt_table(table, database):
 	global username
 	global password
 	global datanode
+	global retries
 
 	table = table.encode('utf-8')
 	database = database.encode('utf-8')
@@ -130,7 +132,7 @@ def make_dt_table(table, database):
 	for a in collist:
 		# print a[0],a[1]
 		if 'BIGINT' == a[1] and 'id' not in a[0]:
-			ins_str = ins_str + ' cast((' + a[0] +')/1000 as timestamp) as `'+a[0]+'_dt`, `' + a[0] + '`,'
+			ins_str = ins_str + ' case when `'+a[0]+'` < 20000000000 then cast(from_unixtime(`' + a[0] +'`) as timestamp) else  cast((`' + a[0] +'`)/1000 as timestamp) end as `'+a[0]+'_dt`, `' + a[0] + '`,'
 		elif 'BINARY' == a[1]:
 			continue
 		else:
@@ -146,37 +148,67 @@ def make_dt_table(table, database):
 		impala_cursor.execute(drop_str.encode('utf-8'))
 		delete_hdfs_files(database,table)
 		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		time.sleep(2)
 		# 'creating blank table \n', ins_str
 		impala_cursor.execute((ins_str).encode('utf-8'))
 		# print 'loading table using hive \n', ('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`')
 		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		time.sleep(2)
 		subprocess.call(('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`'),shell=True)
 		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		time.sleep(2)
 		impala_cursor.execute(drop2_str.encode('utf-8'))
 		delete_hdfs_files(database,table+'_stg')
 		run_impala_cmd(username, password, 'invalidate metadata',datanode)
 		run_compute_stats_bg(username,password,database,table,datanode)
 	except pyodbc.Error as e:
 		run_impala_cmd(username, password, 'invalidate metadata',datanode)
+		time.sleep(5)
 		print 'Couldnt Load table \n', e, '\n', 'ran this query:\n', drop_str, ins_str, drop2_str,'\n','table: '+table, 'database: '+database
 		print 'retrying again\n'
 		try:
 			impala_cursor.execute(drop_str.encode('utf-8'))
 			delete_hdfs_files(database,table)
 			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			time.sleep(2)
 			# 'creating blank table \n', ins_str
 			impala_cursor.execute((ins_str).encode('utf-8'))
 			# print 'loading table using hive \n', ('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`')
 			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			time.sleep(2)
 			subprocess.call(('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`'),shell=True)
 			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			time.sleep(2)
 			impala_cursor.execute(drop2_str.encode('utf-8'))
 			delete_hdfs_files(database,table+'_stg')
 			run_impala_cmd(username, password, 'invalidate metadata',datanode)
-			run_compute_stats_bg(username,password,database,table,datanode)			
-		except:
-			print 'Couldnt Load table \n', e, '\n', 'ran this query:\n', drop_str, ins_str, drop2_str,'\n','table: '+table, 'database: '+database
-			print 'Failed Attempt 2'
+			run_compute_stats_bg(username,password,database,table,datanode)		
+		except pyodbc.Error as e2:
+			run_impala_cmd(username, password, 'invalidate metadata',datanode)
+			time.sleep(5)
+			print 'Couldnt Load table \n', e2, '\n', 'ran this query:\n', drop_str, ins_str, drop2_str,'\n','table: '+table, 'database: '+database
+			print 'Failed Attempt 2, trying to rerun same function again on retry number: 3 '
+			try:
+				impala_cursor.execute(drop_str.encode('utf-8'))
+				delete_hdfs_files(database,table)
+				run_impala_cmd(username, password, 'invalidate metadata',datanode)
+				time.sleep(2)
+				# 'creating blank table \n', ins_str
+				impala_cursor.execute((ins_str).encode('utf-8'))
+				# print 'loading table using hive \n', ('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`')
+				run_impala_cmd(username, password, 'invalidate metadata',datanode)
+				time.sleep(2)
+				subprocess.call(('sudo -u hdfs hive -e "'+hive_str+'"').replace('`','\\`'),shell=True)
+				run_impala_cmd(username, password, 'invalidate metadata',datanode)
+				time.sleep(2)
+				impala_cursor.execute(drop2_str.encode('utf-8'))
+				delete_hdfs_files(database,table+'_stg')
+				run_impala_cmd(username, password, 'invalidate metadata',datanode)
+				run_compute_stats_bg(username,password,database,table,datanode)
+			except pyodbc.Error as e3:
+				print 'failed to load table ' + database + '.' + table + '\n'
+				print 'notifying data-engineering alerts\n'
+				subprocess.call('curl -X POST --data-urlencode \'payload={"channel": "#data-eng-alerts", "username": "Alerts Allen", "text": "failed to load table ' + database + '.' + table + '" , "icon_emoji": ":redcard-ref:"}\' https://hooks.slack.com/services/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',shell=True)
 
 def full_mssql_table_sqoop(table , sqlserver, sqldb, sqlconfig, config,cred_file, hiveserver='localhost', database='default',sqlschema='dbo',view=False):
 	"""Gets table from sql server and sqoops it to hive
@@ -387,8 +419,9 @@ def mssql_incremental_load(hivetable, hivedb, sqltable, sqldb, icol, sqlserver, 
 	except OSError:
 		print 'folder empty'
 
-	impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')
+	impala_cursor.execute('drop table if exists '+hivedb+'.'+hivetable +'_incremental')	
 	run_impala_cmd(username, password, 'invalidate metadata',datanode)
+	run_compute_stats_bg(username,password,hivedb,hivetable.lower(),datanode)
 
 def mysql_incremental_load(cursor, hivetable, hivedb, mysqltable, mysqldb, mysqlserver, mysqlusr, mysqlpw):
 	"""drops table and reloads it in hive
