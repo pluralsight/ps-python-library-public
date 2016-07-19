@@ -6,6 +6,7 @@ import json
 import pyhs2
 import subprocess
 import MySQLdb
+import datetime
 from impala.dbapi import connect
 import pexpect
 
@@ -13,6 +14,37 @@ username = ''
 password = ''
 datanode = ''
 retries = 0
+
+def check_last_modified(db, table, config, cred_file):
+	"""gets table and finds it's last modified date
+
+	    Args:
+	        db: is database of where table exists
+	        table: is the table to find latest modified date
+	        config: is the configuration to be used
+	        cred_file: is the location of the credentials to be used
+
+	    Returns:
+	        mod_date which is the datetime of when the table was last modified
+	"""
+	with open(cred_file,'rb') as cred:
+		db_info = json.loads(cred.read())
+
+	username = db_info[config]['username']
+	pw = db_info[config]['password']
+	datanode = db_info[config]['datanode']
+	hostname = db_info[config]['edgenode']
+	print username,pw,datanode,hostname
+
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+pw+';AuthMech=3;Database=marketing_sandbox',autocommit=True)
+	impala_cursor = impala_connection.cursor()
+	impala_cursor.execute('describe formatted '+db+'.'+table)
+	results = impala_cursor.fetchall()
+	for a in results:
+		if a[1] == 'transient_lastDdlTime':
+			unixtime = a[2]
+	mod_date = datetime.datetime.fromtimestamp(int(unixtime))
+	return mod_date
 
 def create_parquet_table(tabletotransform,destinationtablename):
 	"""makes view or table into parquet format managed table in impala
@@ -25,7 +57,7 @@ def create_parquet_table(tabletotransform,destinationtablename):
 	        nothing
 	"""
 	subprocess.call('sudo -su hdfs hive -e "drop table if exists '+destinationtablename+'"',shell=True)
-	subprocess.call("sudo -su hdfs hive -e \"create table "+destinationtablename+" stored as parquet tblproperties('parquet.compression'='SNAPPY') as select * from "+tabletotransform+"\"",shell=True)
+	subprocess.call("sudo -su hdfs hive -e \"set hive.server2.idle.operation.timeout = 3600000; create table "+destinationtablename+" stored as parquet tblproperties('parquet.compression'='SNAPPY') as select * from "+tabletotransform+"\"",shell=True)
 
 
 def run_impala_cmd(user, pw, cmd, hostname):
@@ -537,13 +569,13 @@ def full_database_sqoop(sqlserver, sqldb, sqlconfig, config,cred_file, hiveserve
 	connection = hive_connect('default', username, password, hiveserver)
 	sqlcursor = sqlconnection.cursor()
 	cursor = connection.cursor()
-	sqlcursor.execute("SELECT t.name, COALESCE(CASE when MIN(k.COLUMN_NAME) <> max(k.COLUMN_NAME) THEN '0' ELSE MAX(k.COLUMN_NAME) END, '0') AS pk, COALESCE(CASE when MIN(SCHEMA_NAME(t.SCHEMA_ID)) <> max(SCHEMA_NAME(t.SCHEMA_ID)) THEN '0' ELSE MAX(SCHEMA_NAME(t.SCHEMA_ID)) END, 'dbo') AS sn FROM sys.tables t LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON t.name = k.table_name GROUP BY t.name")
+	sqlcursor.execute("SELECT t.name , COALESCE(CASE when MIN(k.COLUMN_NAME) <> max(k.COLUMN_NAME) THEN '0' ELSE MAX(k.COLUMN_NAME) END, '0') AS pk, COALESCE(CASE when MIN(SCHEMA_NAME(t.SCHEMA_ID)) <> max(SCHEMA_NAME(t.SCHEMA_ID)) THEN '0' ELSE MAX(SCHEMA_NAME(t.SCHEMA_ID)) END, 'dbo') AS sn , COALESCE(CASE WHEN MIN(c.DATA_TYPE) <>  MAX(c.DATA_TYPE) THEN '0' ELSE MAX(c.DATA_TYPE) END, '0') AS dt FROM sys.tables t LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON t.name = k.table_name LEFT JOIN INFORMATION_SCHEMA.COLUMNS c ON t.name = c.TABLE_NAME AND c.COLUMN_NAME = k.COLUMN_NAME GROUP BY t.name")
 	cursor.execute('create database if not exists '+database)
 	tablelist = sqlcursor.fetchall()
 	for table in tablelist:
 		if table[0] in omitlist:
 			continue
-		elif table[1] == '0':
+		elif table[1] == '0' or table[3] not in ['int','bigint']:
 			truncate_and_load(cursor,table[0],database,table[0],sqldb,sqlserver,sqlusername,sqlpw,table[2])
 		else:
 			truncate_and_load_pk(cursor,table[0],database,table[0],sqldb,sqlserver,sqlusername,sqlpw,table[2])
