@@ -159,7 +159,6 @@ se)
     if include_header_row:
         csvwriter.writerow(dict((fn,fn) for fn in fieldnames))
     for row in data_records_list:
-        #del row['CourseTags']
         csvwriter.writerow(row)
     out_file.close()
 
