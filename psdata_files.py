@@ -159,5 +159,51 @@ se)
     if include_header_row:
         csvwriter.writerow(dict((fn,fn) for fn in fieldnames))
     for row in data_records_list:
+        #del row['CourseTags']
         csvwriter.writerow(row)
     out_file.close()
+
+def loop_json_file(source_file, source_gzipped=False, boolean_type_supported=False):
+    """Read JSON data and write out a tab separated file, typically case is to bulk load it to SQL
+Server
+        Args:
+            source_file: full path of json file to change to tab delimited
+            dest_file: full path for destination file (file extension is not added by this function
+)
+            fieldnames: list of field names that match dictionary keys, such as fieldnames = ['colu
+mn1', 'column2', 'column3']
+            sourect_gzipped: boolean, optional way to specify source file needed unzipped (default
+is False)
+            boolean_type_supported: boolean, created to override conversion of boolean values to bi
+t for loading to SQL Server,
+                set to True if True/False entries should not be converted to 1 or 0 (default is Fal
+se)
+        Returns:
+            None
+    """
+    if source_gzipped:
+        gzip_decompress(source_file)
+        source_file = source_file.replace('.gz','')
+        #print 'File unzipped'
+
+    # Build list of dictionaries (one list record per data row)
+    data_records_list = []
+    with open(source_file, 'rb') as file_in:
+        for row in file_in:
+            tmp_dct = json.loads(row)
+            for k, z in tmp_dct.items():
+                if not boolean_type_supported:
+                    try:
+                        if str(z).upper() == 'TRUE':
+                            tmp_dct[k] = 1
+                        elif str(z).upper() == 'FALSE':
+                            tmp_dct[k] = 0
+                    except UnicodeEncodeError:
+                        pass
+                    try:
+                        tmp_dct[k] = z.encode('utf-8').replace('\t',' ')
+                    except AttributeError:
+                        pass
+            data_records_list.append(tmp_dct)
+
+    return data_records_list
