@@ -6,7 +6,9 @@ import time
 
 from apiclient.discovery import build
 from apiclient.errors import HttpError
-from oauth2client.client import SignedJwtAssertionCredentials
+#from oauth2client.client import SignedJwtAssertionCredentials
+from oauth2client.service_account import ServiceAccountCredentials
+from oauth2client.client import AccessTokenRefreshError
 
 import logging
 logging.basicConfig() #included to avoid message when oauth2client tries to write to log
@@ -17,7 +19,8 @@ logging.basicConfig() #included to avoid message when oauth2client tries to writ
 # for more on the API... https://developers.google.com/resources/api-libraries/documentation/bigquery/v2/python/latest/
 
 # Number of bytes to send/receive in each request.
-CHUNKSIZE = 2 * 1024 * 1024
+CHUNKSIZE = 16 * (256 * 1024) #must be multiple of 256KB which is the calc in parenthesis
+#old setting CHUNKSIZE = 2 * 1024 * 1024
 # Retry transport and file IO errors.
 RETRYABLE_ERRORS = (httplib2.HttpLib2Error, IOError)
 # Mimetype to use if one can't be guessed from the file extension.
@@ -36,14 +39,14 @@ def gcloud_connect(service_account, client_secret_file, scope):
         Returns:
             Authorized HTTP object, result of running SignedJwtAssertionCredentials.authorize() 
     """
-    f = file(client_secret_file, 'rb')
-    key = f.read()
-    f.close()
+    with open(client_secret_file, 'rb') as f:
+        #f = file(client_secret_file, 'rb')
+        key = f.read()
 
-    credentials = SignedJwtAssertionCredentials(
+    credentials = ServiceAccountCredentials.from_p12_keyfile(
         service_account,
-        key,
-        scope=scope)
+        client_secret_file,
+        scopes=scope)
 
     http = httplib2.Http()
     http = credentials.authorize(http)
@@ -83,6 +86,9 @@ def query_table(service, project_id,query):
     except AccessTokenRefreshError:
         print ("Credentials have been revoked or expired, please re-run"
                "the application to re-authorize")
+
+    except KeyError:
+        print "Key Error - no results" 
 
 
 def cloudstorage_upload(service, project_id, bucket, source_file,dest_file, show_status_messages=True):
