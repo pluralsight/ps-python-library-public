@@ -28,32 +28,35 @@ def connect(server, database, username, password):
     connection = psycopg2.connect("dbname='{0}' host='{1}' user='{2}' password='{3}'".format(database, server, username, password))
     return connection
 
-# def insert_list_to_sql(connection,lst,tableName):
-#     """Inserts from a list to a SQL table.  List must have the same format and item order as the table columns.
-#         Args:
-#             list: list, Values to insert to table
-#             tableName: string, Fully qualified SQL table name
+def insert_row_to_db(connection,lst,tableName):
+    """Inserts from a list to a SQL table.  List must have the same format and item order as the table columns.
+        Args:
+            list: list, Values to insert to table
+            tableName: string, Fully qualified SQL table name
 
-#         Returns:
-#             None
-#     """ 
-#     sorted_column_values_list = []
-#     for items in lst:
-#         sorted_column_values_list.append(items)
+        Returns:
+            None
+    """
+    # for val in row:
+    #     if type(val) == int or val == 'null':
+    #         rowstr += str(val) + ','
+    #     else:
+    #         rowstr += "'" + str(val) + "',"
 
-#     for val in sorted_column_values_list:
-#         valstring = '('
-#         for colval in val:
-#             try:
-#                 valstring += "'" + colval + "',"
-#             except TypeError:
-#                 valstring += str(colval) +','
-#         valstring = valstring[0:-1] + ')' #remove trailing comma
-#         query = "INSERT INTO {0} VALUES {1}".format(tableName, valstring)
+    valstring = '('
+    for colval in lst:
+        try:
+            if colval != 'null':
+                valstring += "'" + colval + "',"
+            else:
+                valstring += str(colval) + ','
+        except TypeError:
+            valstring += str(colval) +','
+    valstring = valstring[0:-1] + ')' #remove trailing comma
+    query = "INSERT INTO {0} VALUES {1}".format(tableName, valstring)
 
-#         c = run_sql(connection,query)
-#         #print type(c)
-#     return
+    run_sql(connection,query)
+    return
 
 # formerly named insert_list_to_sql_batch
 def insert_list_to_db(connection,lst,tableName,batchsize=1000):
@@ -437,6 +440,43 @@ def insert_datarows_dct_to_table(data_list, schema_list, connection, table):
 
     insert_list_to_db(connection, insert_list, table,100)
 
+def insert_dct_to_table(dct, schema_list, connection, table):
+    """gets a data list and converts it to the correct data type for inserts then inserts data to a table
+
+    Args:
+        data_list: a list of lists which contain data row Values
+        schema_list: a list of lists which contains all the column names with their respective data type
+
+    Returns:
+        None
+    """
+    load_list = []
+    for col_name, data_type in schema_list:
+        val = dct[col_name]
+        if val is None:
+            load_list.append('null')
+        elif 'int' in data_type:
+            if val == 'null' or val == '':
+                load_list.append('null')
+            else:
+                load_list.append(int(val))
+        elif 'float' in data_type:
+            if val == 'null' or val == '':
+                load_list.append('null')
+            else:
+                load_list.append(float(val))
+        elif 'bool' in data_type:
+            if val == 'null' or val == '':
+                load_list.append('null')
+            else:
+                load_list.append(val)
+        elif 'date' in data_type:
+            load_list.append(str(val)[:19])
+        elif 'timestamp' in data_type:
+            load_list.append(val[:19])
+        else:
+            load_list.append(str(val))
+    insert_row_to_db(connection, load_list, table)
 
 
 
