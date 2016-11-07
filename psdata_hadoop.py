@@ -15,6 +15,34 @@ password = ''
 datanode = ''
 retries = 0
 
+
+def check_row_count(db, table, config, cred_file):
+	"""gets table and finds it's last modified date
+
+	    Args:
+	        db: is database of where table exists
+	        table: is the table to find latest modified date
+	        config: is the configuration to be used
+	        cred_file: is the location of the credentials to be used
+
+	    Returns:
+	        mod_date which is the datetime of when the table was last modified
+	"""
+
+	with open(cred_file,'rb') as cred:
+		db_info = json.loads(cred.read())
+
+	username = db_info[config]['username']
+	pw = db_info[config]['password']
+	datanode = db_info[config]['datanode']
+	hostname = db_info[config]['edgenode']
+
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+pw+';AuthMech=3;Database=marketing_sandbox',autocommit=True)
+	impala_cursor = impala_connection.cursor()
+	impala_cursor.execute('select count(*) from '+db+'.`'+table+'`')
+	results = impala_cursor.fetchall()
+	return results[0][0]
+	
 def check_last_modified(db, table, config, cred_file):
 	"""gets table and finds it's last modified date
 
@@ -34,19 +62,18 @@ def check_last_modified(db, table, config, cred_file):
 	pw = db_info[config]['password']
 	datanode = db_info[config]['datanode']
 	hostname = db_info[config]['edgenode']
-	print username,pw,datanode,hostname
 
 	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+datanode+';PORT=21050;UID='+username+';PWD='+pw+';AuthMech=3;Database=marketing_sandbox',autocommit=True)
 	impala_cursor = impala_connection.cursor()
-	impala_cursor.execute('describe formatted '+db+'.'+table)
+	impala_cursor.execute('describe formatted '+db+'.`'+table+'`')
 	results = impala_cursor.fetchall()
 	for a in results:
 		if a[1] == 'transient_lastDdlTime':
 			unixtime = a[2]
-	mod_date = datetime.datetime.fromtimestamp(int(unixtime))
+	mod_date = datetime.datetime.fromtimestamp(int(unixtime)) - datetime.timedelta(hours=7)
 	return mod_date
 
-def create_parquet_table(tabletotransform,destinationtablename):
+def create_parquet_table(tabletotransform,destinationtablename,runexternal=0,cred_file=''):
 	"""makes view or table into parquet format managed table in impala
 
 	    Args:
@@ -56,8 +83,19 @@ def create_parquet_table(tabletotransform,destinationtablename):
 	    Returns:
 	        nothing
 	"""
+
 	subprocess.call('sudo -su hdfs hive -e "drop table if exists '+destinationtablename+'"',shell=True)
 	subprocess.call("sudo -su hdfs hive -e \"set hive.server2.idle.operation.timeout = 3600000; create table "+destinationtablename+" stored as parquet tblproperties('parquet.compression'='SNAPPY') as select * from "+tabletotransform+"\"",shell=True)
+	if runexternal == 1:
+		with open(cred_file,'rb') as cred:
+			db_info = json.loads(cred.read())
+		username = db_info['datahub']['username']
+		password = db_info['datahub']['password']
+		datanode = db_info['datahub']['datanode']
+		run_impala_cmd(username, password, 'invalidate metadata '+destinationtablename,datanode)
+		run_impala_cmd(username, password, 'compute stats '+destinationtablename,datanode)
+	else:
+		pass
 
 
 def run_impala_cmd(user, pw, cmd, hostname):
@@ -72,7 +110,7 @@ def run_impala_cmd(user, pw, cmd, hostname):
 	    Returns:
 	        nothing
 	"""
-
+	print cmd
 	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+hostname+';PORT=21050;UID='+user+';PWD='+pw+';AuthMech=3;Database=default',autocommit=True)
 	impala_cursor = impala_connection.cursor()
 	impala_cursor.execute(cmd+';')
@@ -82,6 +120,24 @@ def run_impala_cmd(user, pw, cmd, hostname):
 	# child.expect('LDAP password for '+user+':')
 	# child.sendline(pw)
 	# child.expect(pexpect.EOF)
+
+def fetch_impala_cmd(user, pw, cmd, hostname):
+	"""run impala command via odbc and fetch list
+
+	    Args:
+	        user: impala username
+	        pw: password
+	        cmd: command you want run
+	        hostname: datanode where impala instance resides
+
+	    Returns:
+	        list of query results
+	"""
+
+	impala_connection = pyodbc.connect('DRIVER={Cloudera ODBC Driver for Impala 64-bit};HOST='+hostname+';PORT=21050;UID='+user+';PWD='+pw+';AuthMech=3;Database=default',autocommit=True)
+	impala_cursor = impala_connection.cursor()
+	impala_cursor.execute(cmd+';')
+	return impala_cursor.fetchall()
 
 def run_compute_stats_bg(user, pw, db, table, hostname):
 	"""runs compute stat command in background for table
@@ -96,8 +152,8 @@ def run_compute_stats_bg(user, pw, db, table, hostname):
 	    Returns:
 	        nothing
 	"""
-
-	subprocess.call('cd /home/ec2-user/PyETL && /usr/local/bin/python -c "from psdata_hadoop import *; run_impala_cmd(\''+user+'\',\''+pw+'\',\'compute stats '+db+'.'+table+'\',\''+hostname+'\')" &',shell=True)
+	
+	subprocess.call('cd /home/ec2-user/PyETL && /usr/local/bin/python -c "from psdata_hadoop import *; run_impala_cmd(\''+user+'\',\''+pw+'\',\'compute stats '+db+'.\\`'+table+'\\`\',\''+hostname+'\')" &',shell=True)
 	subprocess.call('cd ~',shell=True)
 
 def run_impala_cmd_from_file(user, pw, filepath, hostname,timeout=10000):
@@ -115,6 +171,27 @@ def run_impala_cmd_from_file(user, pw, filepath, hostname,timeout=10000):
 
 	print "impala-shell -i '"+hostname+"' -f '"+filepath+"' -u '"+user+ "' -l"
 	child = pexpect.spawn("impala-shell -i '"+hostname+"' -f '"+filepath+"' -u '"+user+ "' -l")
+	child.logfile_read = sys.stdout
+	child.timeout=timeout
+	child.expect('LDAP password for '+user+':')
+	child.sendline(pw)
+	child.expect(pexpect.EOF)
+
+def run_impala_cmd_from_string(user, pw, query, hostname,timeout=10000):
+	"""run impala command through cli using a file
+
+	    Args:
+	        user: impala username
+	        pw: password
+	        filepath: the full filepath of file to execute
+	        hostname: datanode where impala instance resides
+
+	    Returns:
+	        nothing
+	"""
+
+	print "impala-shell -i '"+hostname+"' -q '"+query+"' -u '"+user+ "' -l"
+	child = pexpect.spawn("impala-shell -i '"+hostname+"' -q \""+query+"\" -u '"+user+ "' -l")
 	child.logfile_read = sys.stdout
 	child.timeout=timeout
 	child.expect('LDAP password for '+user+':')
@@ -175,7 +252,7 @@ def make_dt_table(table, database):
 	hive_str = hive_str + ins_str[:-1].split('as select')[1] + ';'
 	ins_str = ins_str[:-1] + ' from ' + database + '.' + table + '_stg limit 0;'
 	drop2_str = 'drop table if exists ' +database+'.'+table+'_stg;'
-	print drop_str, ins_str, drop2_str
+	# print drop_str, ins_str, drop2_str
 	try:
 		impala_cursor.execute(drop_str.encode('utf-8'))
 		delete_hdfs_files(database,table)
@@ -192,6 +269,7 @@ def make_dt_table(table, database):
 		impala_cursor.execute(drop2_str.encode('utf-8'))
 		delete_hdfs_files(database,table+'_stg')
 		# run_impala_cmd(username, password, 'invalidate metadata '+database+'.'+table,datanode)
+		print database, table
 		run_compute_stats_bg(username,password,database,table,datanode)
 	except pyodbc.Error as e:
 		# run_impala_cmd(username, password, 'invalidate metadata '+database+'.'+table,datanode)
